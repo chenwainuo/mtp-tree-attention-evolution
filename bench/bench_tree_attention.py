@@ -25,7 +25,7 @@ from bench.common import (
     require_target,
 )
 from bench.fp8 import Fp8TensorPair, quantize_fp8_tensor
-from bench.shapes import get_v4_flash_shapes
+from bench.shapes import V4FlashShapes, get_v4_flash_shapes
 
 
 def chain_allows(ctx_len: int, draft_id: int, kv_position: int) -> bool:
@@ -53,6 +53,17 @@ def parse_dtype(torch: Any, name: str) -> Any:
     if name == "bfloat16":
         return torch.bfloat16
     raise ValueError(f"Unsupported dtype {name!r}; use float16 or bfloat16")
+
+
+def default_proxy_head_dim(shapes: V4FlashShapes) -> int:
+    """Use a dense-kernel-compatible head dimension for the proxy path.
+
+    DeepSeek V4's production MLA path uses a 512-wide latent attention state,
+    but the 3090/4090 proxy runs plain dense FlashInfer ragged prefill. The
+    configured index head dimension keeps the proxy tied to V4 metadata while
+    staying inside FlashInfer's supported dense kernel configurations.
+    """
+    return shapes.index_head_dim
 
 
 def make_chain_mask(
@@ -273,7 +284,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     shapes = get_v4_flash_shapes()
     num_q_heads = args.num_q_heads or shapes.num_attention_heads
     num_kv_heads = args.num_kv_heads or shapes.num_key_value_heads
-    head_dim = args.head_dim or shapes.head_dim
+    head_dim = args.head_dim or default_proxy_head_dim(shapes)
 
     if args.dry_run:
         for line in dry_run_lines(

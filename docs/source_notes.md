@@ -65,4 +65,7 @@ FlashInfer test anchor:
 The Stage 1 proxy starts with `BatchPrefillWithRaggedKVCacheWrapper` plus a
 custom boolean mask for chain MTP. The 3090 target uses FP16 K/V. The 4090 target
 uses FP8 K/V with explicit scales and validates against dequantized K/V. Neither
-proxy is the full DeepSeek V4 FlashMLA sparse metadata path.
+proxy is the full DeepSeek V4 FlashMLA sparse metadata path. The dense proxy
+defaults to `index_head_dim = 128` instead of the V4 MLA latent `head_dim = 512`,
+because the plain dense FlashInfer ragged-prefill kernel rejects the 512-wide
+proxy configuration on 3090.

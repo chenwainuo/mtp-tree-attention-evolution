@@ -15,6 +15,7 @@ from bench.flashmla_adapter import (
     load_extraction_report,
 )
 from bench.fp8 import dequantize_scalar, scale_from_amax
+from bench.shapes import get_v4_flash_shapes
 
 
 class BenchmarkDryRunTests(unittest.TestCase):
@@ -29,6 +30,11 @@ class BenchmarkDryRunTests(unittest.TestCase):
         self.assertFalse(bench_tree_attention.chain_allows(ctx_len, 0, 9))
         self.assertTrue(bench_tree_attention.chain_allows(ctx_len, 3, 11))
         self.assertFalse(bench_tree_attention.chain_allows(ctx_len, 3, 12))
+
+    def test_proxy_head_dim_uses_dense_compatible_shape(self) -> None:
+        shapes = get_v4_flash_shapes()
+        self.assertEqual(bench_tree_attention.default_proxy_head_dim(shapes), 128)
+        self.assertLess(bench_tree_attention.default_proxy_head_dim(shapes), shapes.head_dim)
 
     def test_fp8_scalar_helpers(self) -> None:
         self.assertAlmostEqual(scale_from_amax(448.0), 1.0)
@@ -69,7 +75,9 @@ class BenchmarkDryRunTests(unittest.TestCase):
         stream = io.StringIO()
         with redirect_stdout(stream):
             run_benchmark.main(["--gpu", "3090", "--dry-run"])
-        self.assertIn("dense-flashinfer-fp16-proxy", stream.getvalue())
+        output = stream.getvalue()
+        self.assertIn("dense-flashinfer-fp16-proxy", output)
+        self.assertIn("head_dim: 128", output)
 
         stream = io.StringIO()
         with redirect_stdout(stream):
@@ -86,4 +94,3 @@ class BenchmarkDryRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -95,7 +95,10 @@ Important caveat: DeepSeek V4 production attention in vLLM routes through
 FlashMLA sparse attention. The 3090 entry point is an FP16 dense proxy. The 4090
 entry point is an FP8 K/V dense proxy with a dequantized PyTorch reference. Both
 are valid for MTP chain semantics and local iteration, but neither is a
-production FlashMLA baseline.
+production FlashMLA baseline. By default the dense proxy uses V4's
+`index_head_dim = 128` rather than the production MLA latent `head_dim = 512`,
+because the plain dense FlashInfer ragged-prefill kernel does not support the
+512-wide latent shape on the 3090/4090 proxy path.
 
 ## Stage 1 FlashMLA Extraction
 
