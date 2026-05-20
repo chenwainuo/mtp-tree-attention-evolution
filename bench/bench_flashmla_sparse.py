@@ -51,6 +51,14 @@ def call_with_supported_kwargs(
     return fn(**{key: value for key, value in kwargs.items() if key in params})
 
 
+def primary_tensor(result: Any) -> Any:
+    if isinstance(result, (tuple, list)):
+        if not result:
+            raise RuntimeError("FlashMLA returned an empty sequence")
+        return result[0]
+    return result
+
+
 def assert_cuda_ready(torch: Any) -> None:
     if not torch.cuda.is_available():
         raise SystemExit(
@@ -86,6 +94,7 @@ def pytorch_sparse_prefill_reference(
     kv: Any,
     indices: Any,
     sm_scale: float,
+    d_v: int,
 ) -> Any:
     """Reference sparse attention over selected top-k positions.
 
@@ -94,10 +103,11 @@ def pytorch_sparse_prefill_reference(
     FlashMLA sparse op consumes compressed MLA state rather than separate K/V.
     """
     selected = kv[indices[:, 0, :].long(), 0, :].float()
+    selected_v = selected[..., :d_v]
     q_f32 = q.float()
     scores = torch.einsum("thd,tkd->thk", q_f32, selected) * sm_scale
     probs = torch.softmax(scores, dim=-1)
-    out = torch.einsum("thk,tkd->thd", probs, selected)
+    out = torch.einsum("thk,tkd->thd", probs, selected_v)
     return out.to(q.dtype)
 
 
@@ -134,14 +144,22 @@ def run_bf16_sparse_prefill(args: argparse.Namespace) -> None:
     )
     indices = indices[:, None, :].contiguous()
 
-    ref = pytorch_sparse_prefill_reference(torch, q, kv, indices, sm_scale)
+    ref = pytorch_sparse_prefill_reference(torch, q, kv, indices, sm_scale, shapes.head_dim)
     torch.cuda.synchronize()
 
     def run() -> Any:
-        result = symbols.flash_mla_sparse_fwd(q, kv, indices, sm_scale)
-        if isinstance(result, tuple):
-            return result[0]
-        return result
+        result = call_with_supported_kwargs(
+            symbols.flash_mla_sparse_fwd,
+            {
+                "q": q,
+                "kv": kv,
+                "indices": indices,
+                "sm_scale": sm_scale,
+                "d_v": shapes.head_dim,
+            },
+            (q, kv, indices, sm_scale, shapes.head_dim),
+        )
+        return primary_tensor(result)
 
     out = run()
     torch.cuda.synchronize()
@@ -283,9 +301,7 @@ def run_fp8_sparse_decode(args: argparse.Namespace) -> None:
                 cache_seqlens,
             ),
         )
-        if isinstance(result, tuple):
-            return result[0]
-        return result
+        return primary_tensor(result)
 
     out = run()
     torch.cuda.synchronize()

@@ -96,6 +96,12 @@ class BenchmarkDryRunTests(unittest.TestCase):
         )
         self.assertEqual(result, ("q", 512, "idx"))
 
+    def test_primary_tensor_unwraps_tuple_and_list(self) -> None:
+        self.assertEqual(bench_flashmla_sparse.primary_tensor(("out", "lse")), "out")
+        self.assertEqual(bench_flashmla_sparse.primary_tensor(["out", "lse"]), "out")
+        with self.assertRaises(RuntimeError):
+            bench_flashmla_sparse.primary_tensor([])
+
     def test_extraction_report_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "flashmla_extraction.json"
