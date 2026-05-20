@@ -42,6 +42,7 @@ def proxy_args(args: argparse.Namespace) -> list[str]:
         result.extend(["--head-dim", str(args.head_dim)])
     if args.bandwidth_gbs is not None:
         result.extend(["--bandwidth-gbs", str(args.bandwidth_gbs)])
+    result.extend(["--workspace-mb", str(args.workspace_mb)])
     if args.dry_run:
         result.append("--dry-run")
     return result
@@ -106,6 +107,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--bandwidth-gbs", type=float, default=None)
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--rep", type=int, default=100)
+    parser.add_argument("--workspace-mb", type=int, default=2048)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 

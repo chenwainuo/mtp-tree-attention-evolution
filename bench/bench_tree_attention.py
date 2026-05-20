@@ -141,16 +141,19 @@ def pytorch_chain_attention(
 
 def call_flashinfer_run(
     run_fn: Any,
+    q: Any,
+    k: Any,
+    v: Any,
     *,
     use_fp8_kv: bool,
     k_scale: float | None,
     v_scale: float | None,
 ) -> Any:
     if not use_fp8_kv:
-        return run_fn()
+        return run_fn(q, k, v)
 
     try:
-        return run_fn(k_scale=k_scale, v_scale=v_scale, return_lse=False)
+        return run_fn(q, k, v, k_scale=k_scale, v_scale=v_scale, return_lse=False)
     except TypeError as exc:
         raise RuntimeError(
             "Installed FlashInfer wrapper.run does not accept explicit FP8 "
@@ -174,6 +177,7 @@ def make_flashinfer_chain_runner(
     use_fp8_kv: bool,
     k_scale: float | None,
     v_scale: float | None,
+    workspace_bytes: int,
 ) -> Any:
     import flashinfer
 
@@ -186,7 +190,7 @@ def make_flashinfer_chain_runner(
         0, (batch + 1) * seq_len, seq_len, device=device, dtype=torch.int32
     )
 
-    workspace = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=device)
+    workspace = torch.empty(workspace_bytes, dtype=torch.uint8, device=device)
     wrapper = flashinfer.prefill.BatchPrefillWithRaggedKVCacheWrapper(
         workspace,
         kv_layout="NHD",
@@ -207,6 +211,9 @@ def make_flashinfer_chain_runner(
     def run() -> Any:
         return call_flashinfer_run(
             wrapper.run,
+            q,
+            k,
+            v,
             use_fp8_kv=use_fp8_kv,
             k_scale=k_scale,
             v_scale=v_scale,
@@ -250,6 +257,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--rep", type=int, default=100)
+    parser.add_argument(
+        "--workspace-mb",
+        type=int,
+        default=2048,
+        help="FlashInfer planning workspace size in MiB.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-flashinfer", action="store_true")
     args = parser.parse_args(argv)
@@ -275,6 +288,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "heads": f"{num_q_heads}/{num_kv_heads}",
                 "head_dim": head_dim,
                 "fp8_kv": target.uses_fp8_kv,
+                "workspace_mb": args.workspace_mb,
             },
         ):
             print(line)
@@ -347,6 +361,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         use_fp8_kv=target.uses_fp8_kv,
         k_scale=None if k_fp8 is None else k_fp8.scale,
         v_scale=None if v_fp8 is None else v_fp8.scale,
+        workspace_bytes=args.workspace_mb * 1024 * 1024,
     )
     out = flashinfer_run()
     torch.cuda.synchronize()
@@ -398,4 +413,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

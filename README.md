@@ -130,3 +130,35 @@ python -m bench.run_benchmark --gpu h100 --dry-run
 python -m unittest discover tests
 pytest  # after installing requirements.txt
 ```
+
+## RunPod Remote Benchmark
+
+`tools/runpod_benchmark.py` launches a RunPod pod, clones this public repo,
+runs validation, runs the benchmark, and polls `report.json` from the pod's HTTP
+artifact endpoint. The API key is read from `RUNPOD_API_KEY` or `RUNPOD` in
+`.env`.
+
+Preview the pod payload without creating anything:
+
+```bash
+python3 tools/runpod_benchmark.py --local-dry-run --gpu 4090 --remote-dry-run
+```
+
+Run the H100 FlashMLA path and save `report.json` / `output.log` under
+`artifacts/runpod/`:
+
+```bash
+python3 tools/runpod_benchmark.py --gpu h100
+```
+
+Useful variants:
+
+```bash
+python3 tools/runpod_benchmark.py --gpu 4090
+python3 tools/runpod_benchmark.py --gpu h100 --flashmla-mode fp8-decode
+python3 tools/runpod_benchmark.py --gpu h100 --ref main --terminate-on-complete
+python3 tools/runpod_benchmark.py --gpu h100 --benchmark-command "python3 -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --rep 20"
+```
+
+If the selected RunPod image already has the exact CUDA stack installed, use
+`--skip-install` or add image-specific setup with `--extra-setup-command`.
