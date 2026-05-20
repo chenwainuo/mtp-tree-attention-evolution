@@ -97,7 +97,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--head-dim", type=int, default=None)
     parser.add_argument("--topk", type=int, default=512)
     parser.add_argument("--block-size", type=int, default=64)
-    parser.add_argument("--cache-bytes-per-token", type=int, default=656)
+    parser.add_argument("--cache-bytes-per-token", type=int, default=584)
     parser.add_argument("--extraction-report", default=None)
     parser.add_argument(
         "--flashmla-mode",

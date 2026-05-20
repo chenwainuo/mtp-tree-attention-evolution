@@ -25,6 +25,7 @@ DEFAULT_MODULES = (
     "vllm.model_executor.layers.deepseek_v4_attention",
     "vllm.v1.attention.backends.mla.flashmla_sparse",
     "vllm.v1.attention.ops.flashmla",
+    "vllm.attention.ops.flashmla",
 )
 
 DEFAULT_SYMBOLS = {
@@ -49,9 +50,35 @@ DEFAULT_SYMBOLS = {
         "get_mla_metadata",
         "get_flashmla_version",
         "is_flashmla_supported",
+        "is_flashmla_dense_supported",
+        "is_flashmla_sparse_supported",
+        "is_flashmla_v2",
+    ),
+    "vllm.attention.ops.flashmla": (
+        "flash_mla_sparse_fwd",
+        "flash_mla_with_kvcache",
+        "get_mla_metadata",
+        "get_flashmla_version",
+        "is_flashmla_supported",
+        "is_flashmla_dense_supported",
+        "is_flashmla_sparse_supported",
         "is_flashmla_v2",
     ),
 }
+
+SUPPORT_MODULES = (
+    "vllm.v1.attention.backends.mla.flashmla_sparse",
+    "vllm.v1.attention.ops.flashmla",
+    "vllm.attention.ops.flashmla",
+)
+
+SUPPORT_SYMBOLS = (
+    "is_flashmla_sparse_supported",
+    "is_flashmla_dense_supported",
+    "is_flashmla_supported",
+    "is_flashmla_v2",
+    "get_flashmla_version",
+)
 
 
 @dataclass(frozen=True)
@@ -151,38 +178,33 @@ def module_report(module_name: str, max_lines: int) -> ModuleReport:
 
 def collect_support_flags() -> dict[str, Any]:
     flags: dict[str, Any] = {}
-    module, error = safe_import("vllm.v1.attention.backends.mla.flashmla_sparse")
-    if module is None:
-        return {"flashmla_sparse_import_error": error}
-
-    for name in ("is_flashmla_sparse_supported",):
-        if not hasattr(module, name):
-            flags[name] = {"present": False}
+    for module_name in SUPPORT_MODULES:
+        module, error = safe_import(module_name)
+        if module is None:
+            flags[f"{module_name}.__import__"] = {
+                "present": False,
+                "error": error,
+            }
             continue
-        try:
-            supported, reason = normalize_support_flag(getattr(module, name)())
-            flags[name] = {"present": True, "value": supported, "reason": reason}
-        except Exception as exc:  # noqa: BLE001
-            flags[name] = {"present": True, "error": repr(exc)}
 
-    ops, ops_error = safe_import("vllm.v1.attention.ops.flashmla")
-    if ops is None:
-        flags["flashmla_ops_import_error"] = ops_error
-        return flags
-
-    for name in ("is_flashmla_supported", "is_flashmla_v2", "get_flashmla_version"):
-        if not hasattr(ops, name):
-            flags[name] = {"present": False}
-            continue
-        try:
-            raw_value = getattr(ops, name)()
-            if name.startswith("is_"):
-                supported, reason = normalize_support_flag(raw_value)
-                flags[name] = {"present": True, "value": supported, "reason": reason}
-            else:
-                flags[name] = {"present": True, "value": raw_value}
-        except Exception as exc:  # noqa: BLE001
-            flags[name] = {"present": True, "error": repr(exc)}
+        for name in SUPPORT_SYMBOLS:
+            key = f"{module_name}.{name}"
+            if not hasattr(module, name):
+                flags[key] = {"present": False}
+                continue
+            try:
+                raw_value = getattr(module, name)()
+                if name.startswith("is_"):
+                    supported, reason = normalize_support_flag(raw_value)
+                    flags[key] = {
+                        "present": True,
+                        "value": supported,
+                        "reason": reason,
+                    }
+                else:
+                    flags[key] = {"present": True, "value": raw_value}
+            except Exception as exc:  # noqa: BLE001
+                flags[key] = {"present": True, "error": repr(exc)}
 
     return flags
 

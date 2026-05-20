@@ -56,6 +56,28 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
         self.assertIsNotNone(command)
         self.assertIn("uv pip install --system vllm --torch-backend=auto", command)
 
+    def test_h100_remote_config_extracts_flashmla_artifacts(self) -> None:
+        args = argparse.Namespace(
+            python="python3",
+            gpu="h100",
+            install_profile="auto",
+            skip_install=True,
+            skip_preflight=True,
+            remote_dry_run=False,
+            repo_url="https://github.com/example/repo.git",
+            ref=None,
+            extra_setup_command=[],
+            benchmark_command=None,
+            flashmla_mode="bf16-prefill",
+            benchmark_extra=[],
+        )
+        config = runpod_benchmark.build_remote_config(args)
+        self.assertIn("tools.extract_flashmla", config["extract_flashmla_command"])
+        self.assertIn(
+            "/workspace/mtp-runpod-artifacts",
+            config["extract_flashmla_command"],
+        )
+
     def test_pod_payload_exposes_report_port_and_gpu_type(self) -> None:
         args = argparse.Namespace(
             gpu="4090",

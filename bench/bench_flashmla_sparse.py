@@ -7,6 +7,7 @@ checks Hopper/Blackwell support, and refuses to run FlashMLA sparse on 3090/4090
 from __future__ import annotations
 
 import argparse
+import inspect
 import math
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,6 +34,21 @@ def import_runtime_modules() -> tuple[Any, Any]:
     import triton
 
     return torch, triton
+
+
+def call_with_supported_kwargs(
+    fn: Any,
+    kwargs: dict[str, Any],
+    fallback_args: tuple[Any, ...],
+) -> Any:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(*fallback_args)
+
+    if any(param.kind == param.VAR_KEYWORD for param in params.values()):
+        return fn(**kwargs)
+    return fn(**{key: value for key, value in kwargs.items() if key in params})
 
 
 def assert_cuda_ready(torch: Any) -> None:
@@ -194,15 +210,16 @@ def run_fp8_sparse_decode(args: argparse.Namespace) -> None:
     sm_scale = 1.0 / math.sqrt(qk_dim)
 
     q = torch.randn((1, tokens, q_heads, qk_dim), device=device, dtype=torch.bfloat16)
-    kv_cache = torch.randint(
+    kv_cache_bytes = torch.randint(
         0,
         255,
-        (num_blocks, block_size, 1, args.cache_bytes_per_token),
+        (num_blocks, block_size, args.cache_bytes_per_token),
         device=device,
         dtype=torch.uint8,
     )
-    block_table = torch.zeros((1, num_blocks), device=device, dtype=torch.int32)
-    cache_seqlens = torch.full((1,), total_slots, device=device, dtype=torch.int32)
+    kv_cache = kv_cache_bytes.unsqueeze(-2).contiguous()
+    block_table = torch.zeros((1, 1), device=device, dtype=torch.int32)
+    cache_seqlens = torch.full((1,), args.topk, device=device, dtype=torch.int32)
     indices = make_chain_sparse_indices(
         torch,
         args.batch,
@@ -212,29 +229,59 @@ def run_fp8_sparse_decode(args: argparse.Namespace) -> None:
         device=device,
     )
     indices = indices.view(1, tokens, args.topk).contiguous()
-    actual_seq_lens_kv = cache_seqlens.clone()
-
-    tile_scheduler_metadata, num_splits = symbols.get_mla_metadata(
-        cache_seqlens=torch.full((1,), args.topk, device=device, dtype=torch.int32),
-        num_q_tokens_per_head_k=tokens * q_heads,
-        num_heads_q=q_heads,
-        num_heads_k=1,
-        is_fp8_kvcache=True,
+    metadata_kwargs = {
+        "cache_seqlens": cache_seqlens,
+        "num_q_tokens_per_head_k": tokens * q_heads,
+        "num_heads_q": q_heads,
+        "num_heads_k": 1,
+        "is_fp8_kvcache": True,
+        "topk": args.topk,
+    }
+    tile_scheduler_metadata, num_splits = call_with_supported_kwargs(
+        symbols.get_mla_metadata,
+        metadata_kwargs,
+        (
+            metadata_kwargs["cache_seqlens"],
+            metadata_kwargs["num_q_tokens_per_head_k"],
+            metadata_kwargs["num_heads_k"],
+            metadata_kwargs["num_heads_q"],
+            metadata_kwargs["is_fp8_kvcache"],
+        ),
     )
 
     def run() -> Any:
-        result = symbols.flash_mla_with_kvcache(
-            q,
-            kv_cache,
-            block_table,
-            cache_seqlens,
-            tile_scheduler_metadata,
-            num_splits,
-            None,
-            sm_scale,
-            False,
-            indices,
-            actual_seq_lens_kv,
+        kwargs = {
+            "q": q,
+            "k_cache": kv_cache,
+            "kv_cache": kv_cache,
+            "block_table": block_table,
+            "cache_seqlens": cache_seqlens,
+            "head_dim_v": shapes.head_dim,
+            "tile_scheduler_metadata": tile_scheduler_metadata,
+            "num_splits": num_splits,
+            "softmax_scale": sm_scale,
+            "causal": False,
+            "descale_q": None,
+            "descale_k": None,
+            "is_fp8_kvcache": True,
+            "indices": indices,
+        }
+        result = call_with_supported_kwargs(
+            symbols.flash_mla_with_kvcache,
+            kwargs,
+            (
+                q,
+                kv_cache,
+                block_table,
+                cache_seqlens,
+                tile_scheduler_metadata,
+                num_splits,
+                None,
+                sm_scale,
+                False,
+                indices,
+                cache_seqlens,
+            ),
         )
         if isinstance(result, tuple):
             return result[0]
@@ -243,7 +290,7 @@ def run_fp8_sparse_decode(args: argparse.Namespace) -> None:
     out = run()
     torch.cuda.synchronize()
     runtime_ms = triton.testing.do_bench(run, warmup=args.warmup, rep=args.rep)
-    bytes_read = q.numel() * q.element_size() + kv_cache.numel()
+    bytes_read = q.numel() * q.element_size() + kv_cache_bytes.numel()
     bytes_written = out.numel() * out.element_size()
     roofline_us = estimate_memory_roofline_us(
         bytes_read + bytes_written,
@@ -313,7 +360,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--topk", type=int, default=512)
     parser.add_argument("--num-heads", type=int, default=None)
     parser.add_argument("--block-size", type=int, default=64)
-    parser.add_argument("--cache-bytes-per-token", type=int, default=656)
+    parser.add_argument("--cache-bytes-per-token", type=int, default=584)
     parser.add_argument("--bandwidth-gbs", type=float, default=H100_PEAK_BANDWIDTH_GB_S)
     parser.add_argument("--extraction-report", default=None)
     parser.add_argument("--warmup", type=int, default=25)
@@ -332,4 +379,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

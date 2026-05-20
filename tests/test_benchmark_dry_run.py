@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import patch
 
-from bench import bench_tree_attention, run_benchmark
+from bench import bench_flashmla_sparse, bench_tree_attention, run_benchmark
 from bench.common import normalize_support_flag, require_target
 from bench.flashmla_adapter import (
     ensure_decode_signature,
     ensure_sparse_prefill_signature,
+    flashmla_support_status,
+    import_flashmla_symbols,
     load_extraction_report,
 )
 from bench.fp8 import dequantize_scalar, scale_from_amax
@@ -48,6 +53,48 @@ class BenchmarkDryRunTests(unittest.TestCase):
             normalize_support_flag((False, "sm_86 unsupported")),
             (False, "sm_86 unsupported"),
         )
+
+    def test_flashmla_support_status_finds_ops_checker(self) -> None:
+        backend = ModuleType("fake_backend")
+        ops = ModuleType("fake_ops")
+
+        def is_flashmla_sparse_supported():
+            return False, "extension missing"
+
+        ops.is_flashmla_sparse_supported = is_flashmla_sparse_supported
+        with patch(
+            "bench.flashmla_adapter.FLASHMLA_MODULE_CANDIDATES",
+            ("fake_backend", "fake_ops"),
+        ):
+            with patch.dict(sys.modules, {"fake_backend": backend, "fake_ops": ops}):
+                self.assertEqual(
+                    flashmla_support_status(backend),
+                    (False, "extension missing"),
+                )
+
+    def test_flashmla_symbol_import_skips_empty_modules(self) -> None:
+        backend = ModuleType("fake_backend")
+        ops = ModuleType("fake_ops")
+        ops.flash_mla_sparse_fwd = lambda q, kv, indices, scale: (q, kv, indices, scale)
+        with patch(
+            "bench.flashmla_adapter.FLASHMLA_MODULE_CANDIDATES",
+            ("fake_backend", "fake_ops"),
+        ):
+            with patch.dict(sys.modules, {"fake_backend": backend, "fake_ops": ops}):
+                symbols = import_flashmla_symbols()
+        self.assertEqual(symbols.module_name, "fake_ops")
+        self.assertIs(symbols.flash_mla_sparse_fwd, ops.flash_mla_sparse_fwd)
+
+    def test_flashmla_keyword_call_filters_to_signature(self) -> None:
+        def fn(q, *, head_dim_v, indices=None):
+            return q, head_dim_v, indices
+
+        result = bench_flashmla_sparse.call_with_supported_kwargs(
+            fn,
+            {"q": "q", "head_dim_v": 512, "indices": "idx", "ignored": "x"},
+            ("fallback",),
+        )
+        self.assertEqual(result, ("q", 512, "idx"))
 
     def test_extraction_report_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

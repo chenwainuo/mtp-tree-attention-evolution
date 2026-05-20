@@ -33,12 +33,15 @@ Current vLLM source anchors:
 
 - `vllm/model_executor/layers/deepseek_v4_attention.py`
 - `vllm/v1/attention/ops/flashmla.py`
+- `vllm/v1/attention/backends/mla/flashmla_sparse.py`
+- `vllm/attention/ops/flashmla.py`
 
 Important implementation detail: current vLLM DeepSeek V4 attention routes through
 FlashMLA sparse attention for the production path, not plain dense FlashInfer
-prefill. vLLM's FlashMLA sparse availability check says it is supported on
-Hopper/Blackwell device families, so the 3090/4090 path may need a fallback or a
-proxy benchmark.
+prefill. vLLM's FlashMLA sparse availability check is exposed from different ops
+modules across releases and says the kernel is a Hopper/Blackwell path, so the
+3090/4090 path uses a proxy benchmark. Current V4 packed FP8 KV cache entries
+are 584 bytes per token.
 
 FlashMLA extraction artifacts:
 

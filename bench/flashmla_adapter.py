@@ -16,6 +16,7 @@ from bench.common import normalize_support_flag
 FLASHMLA_MODULE_CANDIDATES = (
     "vllm.v1.attention.backends.mla.flashmla_sparse",
     "vllm.v1.attention.ops.flashmla",
+    "vllm.attention.ops.flashmla",
 )
 
 
@@ -44,6 +45,7 @@ def load_extraction_report(path: Path) -> FlashMLAExtraction:
 
 def import_flashmla_symbols() -> FlashMLASymbols:
     errors: list[str] = []
+    imported: list[FlashMLASymbols] = []
     for module_name in FLASHMLA_MODULE_CANDIDATES:
         try:
             module = importlib.import_module(module_name)
@@ -51,13 +53,26 @@ def import_flashmla_symbols() -> FlashMLASymbols:
             errors.append(f"{module_name}: {exc!r}")
             continue
 
-        return FlashMLASymbols(
+        symbols = FlashMLASymbols(
             flash_mla_sparse_fwd=getattr(module, "flash_mla_sparse_fwd", None),
             flash_mla_with_kvcache=getattr(module, "flash_mla_with_kvcache", None),
             get_mla_metadata=getattr(module, "get_mla_metadata", None),
             module_name=module_name,
             module=module,
         )
+        imported.append(symbols)
+        if any(
+            symbol is not None
+            for symbol in (
+                symbols.flash_mla_sparse_fwd,
+                symbols.flash_mla_with_kvcache,
+                symbols.get_mla_metadata,
+            )
+        ):
+            return symbols
+
+    if imported:
+        return imported[0]
 
     raise RuntimeError(
         "Could not import FlashMLA symbols from vLLM. Run "
@@ -66,13 +81,41 @@ def import_flashmla_symbols() -> FlashMLASymbols:
     )
 
 
+def flashmla_support_checker(module: ModuleType) -> Any | None:
+    for name in (
+        "is_flashmla_sparse_supported",
+        "is_flashmla_supported",
+        "is_flashmla_dense_supported",
+    ):
+        checker = getattr(module, name, None)
+        if checker is not None:
+            return checker
+    return None
+
+
 def flashmla_support_status(module: ModuleType) -> tuple[bool, str | None]:
-    checker = getattr(module, "is_flashmla_sparse_supported", None)
+    checker = flashmla_support_checker(module)
+    errors: list[str] = []
     if checker is None:
-        checker = getattr(module, "is_flashmla_supported", None)
+        for module_name in FLASHMLA_MODULE_CANDIDATES:
+            try:
+                candidate = importlib.import_module(module_name)
+            except Exception as exc:  # noqa: BLE001 - environment probe.
+                errors.append(f"{module_name}: {exc!r}")
+                continue
+            checker = flashmla_support_checker(candidate)
+            if checker is not None:
+                break
+
     if checker is None:
-        return False, "no FlashMLA support checker found"
-    return normalize_support_flag(checker())
+        details = "" if not errors else "; " + "; ".join(errors)
+        return False, "no FlashMLA support checker found" + details
+    try:
+        return normalize_support_flag(checker())
+    except Exception as exc:  # noqa: BLE001 - support probes should be reportable.
+        checker_name = getattr(checker, "__name__", type(checker).__name__)
+        checker_module = getattr(checker, "__module__", module.__name__)
+        return False, f"{checker_module}.{checker_name} raised {exc!r}"
 
 
 def assert_hopper_or_blackwell(torch: Any) -> None:
@@ -118,4 +161,3 @@ def ensure_decode_signature(fn: Any) -> None:
             "`flash_mla_with_kvcache` signature is not supported by this scaffold; "
             f"expected at least 10 parameters, got {arity}"
         )
-

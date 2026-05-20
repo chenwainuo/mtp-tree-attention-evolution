@@ -86,6 +86,14 @@ def atomic_write_json(path, payload):
 
 
 def write_report(status, phase, **extra):
+    artifacts = {
+        "report": "report.json",
+        "output": "output.log",
+        "http_log": "http.log",
+    }
+    if cfg.get("extract_flashmla_command"):
+        artifacts["flashmla_extraction_json"] = "flashmla_extraction.json"
+        artifacts["flashmla_extraction_md"] = "flashmla_extraction.md"
     payload = {
         "status": status,
         "phase": phase,
@@ -97,12 +105,9 @@ def write_report(status, phase, **extra):
         "benchmark_command": cfg["benchmark_command"],
         "install_profile": cfg.get("install_profile"),
         "preflight_command": cfg.get("preflight_command") or None,
+        "extract_flashmla_command": cfg.get("extract_flashmla_command") or None,
         "install_command": cfg.get("install_command") or None,
-        "artifacts": {
-            "report": "report.json",
-            "output": "output.log",
-            "http_log": "http.log",
-        },
+        "artifacts": artifacts,
         "commands": commands,
         "tail": list(tail),
     }
@@ -180,6 +185,14 @@ def main():
 
         if cfg.get("preflight_command"):
             run_step("preflight", cfg["preflight_command"], cwd=repo_dir, shell=True)
+
+        if cfg.get("extract_flashmla_command"):
+            run_step(
+                "extract flashmla",
+                cfg["extract_flashmla_command"],
+                cwd=repo_dir,
+                shell=True,
+            )
 
         run_step("benchmark", cfg["benchmark_command"], cwd=repo_dir, shell=True)
     except StepFailed as exc:
@@ -295,6 +308,13 @@ def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
             f"{quoted_python} -m unittest discover tests"
         )
 
+    extract_flashmla_command = None
+    if args.gpu == "h100" and not args.remote_dry_run:
+        extract_flashmla_command = (
+            f"{shlex.quote(python)} -m tools.extract_flashmla "
+            "--out-dir /workspace/mtp-runpod-artifacts"
+        )
+
     return {
         "repo_url": args.repo_url,
         "ref": args.ref,
@@ -305,6 +325,7 @@ def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
         "install_profile": resolve_install_profile(args),
         "extra_setup_commands": args.extra_setup_command,
         "preflight_command": preflight_command,
+        "extract_flashmla_command": extract_flashmla_command,
         "benchmark_command": args.benchmark_command or default_benchmark_command(args),
     }
 
@@ -483,7 +504,13 @@ def save_artifacts(
     (run_dir / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True))
 
     base_url = artifacts_base_url(pod_id, report_port)
-    for artifact_name in ("output.log", "http.log"):
+    artifact_names = {"output.log", "http.log"}
+    artifact_names.update(
+        name
+        for name in (report.get("artifacts") or {}).values()
+        if isinstance(name, str) and name != "report.json"
+    )
+    for artifact_name in sorted(artifact_names):
         try:
             data = fetch_bytes(f"{base_url}/{artifact_name}", timeout=60)
         except Exception as exc:  # best effort; report.json is the source of truth

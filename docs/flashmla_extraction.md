@@ -12,6 +12,7 @@ Source anchors:
 - `vllm/model_executor/layers/deepseek_v4_attention.py`
 - `vllm/v1/attention/backends/mla/flashmla_sparse.py`
 - `vllm/v1/attention/ops/flashmla.py`
+- `vllm/attention/ops/flashmla.py`
 
 The relevant flow is:
 
@@ -22,10 +23,9 @@ The relevant flow is:
 3. The BF16 sparse prefill path calls `flash_mla_sparse_fwd`.
 4. The FP8 sparse decode path calls `flash_mla_with_kvcache` with:
    - query tensor including latent + rope dimensions;
-   - packed V4 FP8 KV cache;
+   - packed V4 FP8 KV cache, currently 584 bytes per token;
    - top-k sparse indices;
-   - tile scheduler metadata from `get_mla_metadata`;
-   - actual sequence lengths for sparse index validation.
+   - tile scheduler metadata from `get_mla_metadata`.
 
 ## Why This Matters
 
