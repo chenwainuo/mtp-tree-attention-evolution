@@ -43,7 +43,7 @@ DEFAULT_GPU_TYPES = {
     "h100": ["NVIDIA H100 80GB HBM3"],
 }
 
-INSTALL_PROFILES = ("auto", "pinned", "runpod-pytorch", "runpod-vllm")
+INSTALL_PROFILES = ("auto", "pinned", "runpod-pytorch", "runpod-vllm", "runpod-vllm-source")
 
 
 REMOTE_WORKER = r"""
@@ -94,9 +94,17 @@ def write_report(status, phase, **extra):
     if cfg.get("extract_flashmla_command"):
         artifacts["flashmla_extraction_json"] = "flashmla_extraction.json"
         artifacts["flashmla_extraction_md"] = "flashmla_extraction.md"
-    for optional_artifact in ("candidate_summary.json",):
-        if (artifacts_dir / optional_artifact).exists():
-            artifacts[optional_artifact.removesuffix(".json")] = optional_artifact
+    artifact_prefixes = (
+        "applied_patch",
+        "build",
+        "candidate_summary",
+        "flashmla_extraction",
+        "source_build_summary",
+        "source_provenance",
+    )
+    for optional_artifact in sorted(artifacts_dir.iterdir()) if artifacts_dir.exists() else []:
+        if optional_artifact.is_file() and optional_artifact.name.startswith(artifact_prefixes):
+            artifacts[optional_artifact.name.replace(".", "_")] = optional_artifact.name
     payload = {
         "status": status,
         "phase": phase,
@@ -297,6 +305,11 @@ def build_install_command(args: argparse.Namespace, python: str) -> str | None:
             f"{quoted_python} -m pip install --upgrade pip uv && "
             "uv pip install --system vllm --torch-backend=auto"
         )
+    if profile == "runpod-vllm-source":
+        return (
+            f"{quoted_python} -m pip install --upgrade pip uv ninja cmake && "
+            "uv pip install --system vllm --torch-backend=auto"
+        )
     raise ValueError(f"unknown install profile {profile!r}")
 
 
@@ -313,7 +326,7 @@ def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     extract_flashmla_command = None
-    if args.gpu == "h100" and not args.remote_dry_run:
+    if args.gpu == "h100" and not args.remote_dry_run and not args.skip_extract_flashmla:
         extract_flashmla_command = (
             f"{shlex.quote(python)} -m tools.extract_flashmla "
             "--out-dir /workspace/mtp-runpod-artifacts --max-lines 180"
@@ -559,6 +572,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-install", action="store_true")
     parser.add_argument("--extra-setup-command", action="append", default=[])
     parser.add_argument("--skip-preflight", action="store_true")
+    parser.add_argument("--skip-extract-flashmla", action="store_true")
     parser.add_argument("--remote-dry-run", action="store_true")
     parser.add_argument("--flashmla-mode", choices=("bf16-prefill", "fp8-decode"), default="bf16-prefill")
     parser.add_argument("--flashmla-impl", choices=("flashmla", "triton"), default="flashmla")

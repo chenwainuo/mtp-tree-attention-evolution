@@ -1,0 +1,12 @@
+diff --git a/csrc/sm90/prefill/sparse/config.h b/csrc/sm90/prefill/sparse/config.h
+--- a/csrc/sm90/prefill/sparse/config.h
++++ b/csrc/sm90/prefill/sparse/config.h
+@@ -21,7 +21,7 @@ static constexpr int D_K = D_QK;
+ static constexpr int D_V = 512;
+ 
+ static constexpr int B_H = 64;
+-static constexpr int B_TOPK = 64;    // TopK block size
++static constexpr int B_TOPK = (D_QK == 576 && !HAVE_TOPK_LENGTH) ? 128 : 64;    // TopK block size
+ static constexpr int NUM_THREADS = 128*3;
+ static constexpr float MAX_INIT_VAL = -1e30;    // We use this number as the initial value for mi (max logits)
+ 

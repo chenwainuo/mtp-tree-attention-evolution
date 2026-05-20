@@ -80,6 +80,11 @@ SUPPORT_SYMBOLS = (
     "get_flashmla_version",
 )
 
+EXTENSION_MODULES = (
+    "vllm._flashmla_C",
+    "vllm._flashmla_extension_C",
+)
+
 
 @dataclass(frozen=True)
 class SymbolReport:
@@ -228,6 +233,42 @@ def collect_torch_cuda() -> dict[str, Any]:
     return result
 
 
+def collect_extension_modules() -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for module_name in EXTENSION_MODULES:
+        module, error = safe_import(module_name)
+        if module is None:
+            result[module_name] = {
+                "present": False,
+                "error": error,
+            }
+        else:
+            result[module_name] = {
+                "present": True,
+                "file": getattr(module, "__file__", None),
+            }
+    return result
+
+
+def collect_source_provenance_hint() -> dict[str, Any]:
+    path = Path("/workspace/mtp-runpod-artifacts/source_provenance.json")
+    if not path.exists():
+        return {"present": False}
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001 - this should be reportable, not fatal.
+        return {
+            "present": True,
+            "path": str(path),
+            "error": repr(exc),
+        }
+    return {
+        "present": True,
+        "path": str(path),
+        "data": data,
+    }
+
+
 def write_markdown(report: dict[str, Any], output_path: Path) -> None:
     lines = ["# FlashMLA Extraction Report", ""]
     lines.append("## Environment")
@@ -241,6 +282,18 @@ def write_markdown(report: dict[str, Any], output_path: Path) -> None:
     for key, value in report["support_flags"].items():
         lines.append(f"- `{key}`: `{value}`")
     lines.append("")
+
+    lines.append("## Extension Modules")
+    for key, value in report.get("extension_modules", {}).items():
+        lines.append(f"- `{key}`: `{value}`")
+    lines.append("")
+
+    if report.get("source_provenance_hint", {}).get("present"):
+        lines.append("## Source Provenance Hint")
+        lines.append("```json")
+        lines.append(json.dumps(report["source_provenance_hint"], indent=2, default=str))
+        lines.append("```")
+        lines.append("")
 
     lines.append("## Modules And Symbols")
     for module in report["modules"]:
@@ -266,6 +319,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", type=Path, default=Path("artifacts"))
     parser.add_argument("--max-lines", type=int, default=80)
+    parser.add_argument("--label", default=None)
     args = parser.parse_args(argv)
 
     modules = [module_report(name, args.max_lines) for name in DEFAULT_MODULES]
@@ -277,13 +331,16 @@ def main(argv: list[str] | None = None) -> None:
             "flashmla": version_of("flashmla"),
         },
         "torch_cuda": collect_torch_cuda(),
+        "extension_modules": collect_extension_modules(),
+        "source_provenance_hint": collect_source_provenance_hint(),
         "support_flags": collect_support_flags(),
         "modules": [asdict(module) for module in modules],
     }
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    json_path = args.out_dir / "flashmla_extraction.json"
-    md_path = args.out_dir / "flashmla_extraction.md"
+    suffix = "" if args.label is None else f"_{args.label}"
+    json_path = args.out_dir / f"flashmla_extraction{suffix}.json"
+    md_path = args.out_dir / f"flashmla_extraction{suffix}.md"
     json_path.write_text(json.dumps(report, indent=2, default=str))
     write_markdown(report, md_path)
     print(f"Wrote {json_path}")

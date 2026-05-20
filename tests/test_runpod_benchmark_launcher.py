@@ -58,6 +58,18 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
         self.assertIsNotNone(command)
         self.assertIn("uv pip install --system vllm --torch-backend=auto", command)
 
+    def test_h100_source_install_profile_installs_build_tools(self) -> None:
+        args = argparse.Namespace(
+            gpu="h100",
+            install_profile="runpod-vllm-source",
+            skip_install=False,
+        )
+        command = runpod_benchmark.build_install_command(args, "python3")
+        self.assertIsNotNone(command)
+        self.assertIn("ninja", command)
+        self.assertIn("cmake", command)
+        self.assertIn("uv pip install --system vllm --torch-backend=auto", command)
+
     def test_h100_remote_config_extracts_flashmla_artifacts(self) -> None:
         args = argparse.Namespace(
             python="python3",
@@ -65,6 +77,7 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
             install_profile="auto",
             skip_install=True,
             skip_preflight=True,
+            skip_extract_flashmla=False,
             remote_dry_run=False,
             repo_url="https://github.com/example/repo.git",
             ref=None,
@@ -80,6 +93,26 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
             "/workspace/mtp-runpod-artifacts",
             config["extract_flashmla_command"],
         )
+
+    def test_h100_remote_config_can_skip_flashmla_extraction(self) -> None:
+        args = argparse.Namespace(
+            python="python3",
+            gpu="h100",
+            install_profile="auto",
+            skip_install=True,
+            skip_preflight=True,
+            skip_extract_flashmla=True,
+            remote_dry_run=False,
+            repo_url="https://github.com/example/repo.git",
+            ref=None,
+            extra_setup_command=[],
+            benchmark_command=None,
+            flashmla_mode="bf16-prefill",
+            flashmla_impl="flashmla",
+            benchmark_extra=[],
+        )
+        config = runpod_benchmark.build_remote_config(args)
+        self.assertIsNone(config["extract_flashmla_command"])
 
     def test_pod_payload_exposes_report_port_and_gpu_type(self) -> None:
         args = argparse.Namespace(

@@ -1,12 +1,7 @@
-"""Run a bounded H100 sparse-prefill evolution loop on RunPod.
+"""Run bounded H100 Triton comparison candidates on RunPod.
 
-The loop is intentionally conservative:
-
-- BF16 sparse prefill is the correctness gate.
-- FlashMLA remains the baseline/source of truth.
-- Triton candidates are opt-in experiment variants.
-- The loop stops on the first correctness-passing candidate that clears the
-  requested speedup threshold, or when the candidate quota is exhausted.
+This is not the FlashMLA optimization loop. Use tools/evolve_flashmla.py for
+source-building and patching FlashMLA itself.
 """
 
 from __future__ import annotations

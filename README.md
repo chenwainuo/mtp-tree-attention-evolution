@@ -22,9 +22,9 @@ MTP chain-attention microbenchmark.
 - H100 BF16 sparse prefill is the correctness-bearing baseline. The latest
   verified RunPod H100 result was 23.29 us with PyTorch-reference correctness
   PASS at the default shape.
-- `tools/evolve_h100.py` runs a bounded H100 candidate loop against that BF16
-  correctness gate and stops on the first speedup that clears the configured
-  threshold.
+- `tools/evolve_flashmla.py` runs the actual FlashMLA source-build loop: no-op
+  source build first, then a patched FlashMLA candidate against the BF16
+  correctness gate.
 
 ## Environment
 
@@ -120,8 +120,6 @@ Then run the low-level FlashMLA sparse smoke/speed benchmarks:
 python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill
 python -m bench.run_benchmark --gpu h100 --flashmla-mode fp8-decode
 python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --dry-run
-python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --flashmla-impl triton --dry-run
-python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --flashmla-impl triton --triton-layout grouped
 python -m bench.bench_flashmla_sparse --mode bf16-prefill
 python -m bench.bench_flashmla_sparse --mode fp8-decode
 ```
@@ -184,29 +182,44 @@ The launcher defaults to `--install-profile auto`:
   from `requirements-runpod.txt`.
 - `h100`: uses `runpod-vllm`, which installs vLLM with `uv pip install --system
   vllm --torch-backend=auto` before running the FlashMLA path.
+- `runpod-vllm-source`: installs the same vLLM wheel/dependencies plus build
+  tools for the FlashMLA source-build loop.
 
 Use `--install-profile pinned` to install the full local `requirements.txt`
 including `torch==2.12.0`.
 
-## H100 Evolution Loop
+## FlashMLA Source-Build Loop
 
-Use the evolution loop only after pushing the candidate branch, because RunPod
-clones this public repository by `--ref`.
+Use the FlashMLA source-build loop only after pushing the candidate branch,
+because RunPod clones this public repository by `--ref`. This is the project’s
+optimization path for the real V4 FlashMLA implementation.
 
-Preview planned candidates without creating pods:
-
-```bash
-python3 tools/evolve_h100.py --local-dry-run --max-candidates 2 --ref main
-```
-
-Run a bounded remote loop. By default all candidates run inside one H100 pod and
-the pod is terminated after the sweep:
+Preview the source-build loop without creating a pod:
 
 ```bash
-python3 tools/evolve_h100.py --ref main --baseline-us 23.29 --max-candidates 5
+python3 tools/evolve_flashmla.py \
+  --local-dry-run \
+  --candidate patches/flashmla/bf16_prefill/sm90_btopk128.patch
 ```
 
-The loop parses each candidate's `Correctness:` and `Runtime:` lines from
-RunPod artifacts. Candidates only count if BF16 correctness reports `PASS`; FP8
-decode remains smoke/speed-only until a packed-cache correctness reference is
-implemented.
+Run the first bounded remote loop. This does a no-op source build first, then
+applies the candidate patch and rebuilds FlashMLA:
+
+```bash
+python3 tools/evolve_flashmla.py \
+  --ref main \
+  --baseline-us 23.29 \
+  --source-ref v0.21.0 \
+  --candidate patches/flashmla/bf16_prefill/sm90_btopk128.patch \
+  --terminate-on-complete
+```
+
+The loop accepts a candidate only if BF16 sparse prefill correctness reports
+`PASS` and runtime improves by at least the configured threshold versus the
+no-op source-build baseline. It also reports comparison to the existing wheel
+baseline `23.29 us`. If the no-op source build drifts by more than
+`--source-baseline-max-drift-pct` from the wheel baseline, the loop stops before
+testing candidates.
+
+`tools/evolve_h100.py` and `--flashmla-impl triton` remain comparison-only
+experiments. They are not the FlashMLA optimization target.
