@@ -68,6 +68,7 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
         self.assertIsNotNone(command)
         self.assertIn("ninja", command)
         self.assertIn("cmake", command)
+        self.assertIn("setuptools_scm", command)
         self.assertIn("uv pip install --system vllm --torch-backend=auto", command)
 
     def test_h100_remote_config_extracts_flashmla_artifacts(self) -> None:

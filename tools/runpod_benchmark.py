@@ -307,7 +307,7 @@ def build_install_command(args: argparse.Namespace, python: str) -> str | None:
         )
     if profile == "runpod-vllm-source":
         return (
-            f"{quoted_python} -m pip install --upgrade pip uv ninja cmake && "
+            f"{quoted_python} -m pip install --upgrade pip uv ninja cmake setuptools_scm && "
             "uv pip install --system vllm --torch-backend=auto"
         )
     raise ValueError(f"unknown install profile {profile!r}")
