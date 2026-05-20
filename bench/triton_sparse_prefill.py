@@ -222,7 +222,11 @@ def get_grouped_sparse_prefill_kernel(triton: Any) -> Any:
                 mask=(k_pos[:, None] < topk) & (offs_v[None, :] < value_dim),
                 other=0.0,
             )
-            acc = acc * alpha[:, None] + tl.dot(probs, v_tile, input_precision="tf32")
+            acc = acc * alpha[:, None] + tl.dot(
+                probs,
+                v_tile.to(tl.float32),
+                input_precision="tf32",
+            )
             l_i = l_i * alpha + tl.sum(probs, axis=1)
             m_i = m_new
 
