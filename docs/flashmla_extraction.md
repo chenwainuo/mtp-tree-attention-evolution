@@ -23,7 +23,8 @@ The relevant flow is:
 3. The BF16 sparse prefill path calls `flash_mla_sparse_fwd`.
 4. The FP8 sparse decode path calls `flash_mla_with_kvcache` with:
    - query tensor including latent + rope dimensions;
-   - packed V4 FP8 KV cache, currently 584 bytes per token;
+   - packed FP8 KV cache, currently 656 bytes per token in the RunPod vLLM
+     0.21 wheel tested by this launcher;
    - top-k sparse indices;
    - tile scheduler metadata from `get_mla_metadata`.
 

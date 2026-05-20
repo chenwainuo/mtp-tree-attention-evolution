@@ -40,8 +40,9 @@ Important implementation detail: current vLLM DeepSeek V4 attention routes throu
 FlashMLA sparse attention for the production path, not plain dense FlashInfer
 prefill. vLLM's FlashMLA sparse availability check is exposed from different ops
 modules across releases and says the kernel is a Hopper/Blackwell path, so the
-3090/4090 path uses a proxy benchmark. Current V4 packed FP8 KV cache entries
-are 584 bytes per token.
+3090/4090 path uses a proxy benchmark. The RunPod vLLM 0.21 wheel used for H100
+testing reports a 656-byte `fp8_ds_mla` cache shape; keep checking extraction
+artifacts before assuming a different packed-cache layout.
 
 FlashMLA extraction artifacts:
 

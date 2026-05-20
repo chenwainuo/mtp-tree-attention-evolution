@@ -136,7 +136,9 @@ class BenchmarkDryRunTests(unittest.TestCase):
         stream = io.StringIO()
         with redirect_stdout(stream):
             run_benchmark.main(["--gpu", "h100", "--dry-run"])
-        self.assertIn("flashmla-sparse", stream.getvalue())
+        output = stream.getvalue()
+        self.assertIn("flashmla-sparse", output)
+        self.assertIn("cache_bytes_per_token: 656", output)
 
 
 if __name__ == "__main__":

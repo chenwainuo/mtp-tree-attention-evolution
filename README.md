@@ -121,8 +121,10 @@ python -m bench.bench_flashmla_sparse --mode fp8-decode
 Read [docs/flashmla_extraction.md](docs/flashmla_extraction.md) before treating
 these as baselines. The FP8 path mirrors the production packed-cache call more
 closely, but it is not a correctness benchmark until we reproduce the V4 packed
-KV-cache dequantization reference. The default packed-cache byte width is 584
-bytes per token for DeepSeek V4.
+KV-cache dequantization reference. The default packed-cache byte width is 656
+bytes per token because the current RunPod vLLM 0.21 wheel reports that storage
+shape for `fp8_ds_mla`; override `--cache-bytes-per-token` if extraction shows a
+different installed layout.
 
 ## Local Validation Without CUDA
 

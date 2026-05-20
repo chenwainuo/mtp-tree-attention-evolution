@@ -312,7 +312,7 @@ def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
     if args.gpu == "h100" and not args.remote_dry_run:
         extract_flashmla_command = (
             f"{shlex.quote(python)} -m tools.extract_flashmla "
-            "--out-dir /workspace/mtp-runpod-artifacts"
+            "--out-dir /workspace/mtp-runpod-artifacts --max-lines 180"
         )
 
     return {

@@ -323,6 +323,7 @@ def dry_run(args: argparse.Namespace) -> None:
         "heads": args.num_heads or shapes.num_attention_heads,
         "topk": args.topk,
         "block_size": args.block_size,
+        "cache_bytes_per_token": args.cache_bytes_per_token,
         "requires": "Hopper/Blackwell FlashMLA sparse",
     }
     if args.extraction_report:
@@ -360,7 +361,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--topk", type=int, default=512)
     parser.add_argument("--num-heads", type=int, default=None)
     parser.add_argument("--block-size", type=int, default=64)
-    parser.add_argument("--cache-bytes-per-token", type=int, default=584)
+    parser.add_argument("--cache-bytes-per-token", type=int, default=656)
     parser.add_argument("--bandwidth-gbs", type=float, default=H100_PEAK_BANDWIDTH_GB_S)
     parser.add_argument("--extraction-report", default=None)
     parser.add_argument("--warmup", type=int, default=25)
