@@ -4,6 +4,9 @@
 # `torch` supplies the compatible Triton wheel on Linux x86_64; verify the exact
 # Triton version in the smoke test and freeze a lockfile after the first GPU run.
 # vLLM 0.19.0 / NVIDIA 26.04 reports flashinfer 0.6.7.post3.
+#
+# RunPod's default launcher profile uses requirements-runpod.txt instead so it
+# can keep the CUDA-compatible PyTorch build from the selected RunPod image.
 
 torch==2.12.0
 flashinfer-python==0.6.7.post3

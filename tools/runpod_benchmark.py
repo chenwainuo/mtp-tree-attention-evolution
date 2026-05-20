@@ -43,6 +43,8 @@ DEFAULT_GPU_TYPES = {
     "h100": ["NVIDIA H100 80GB HBM3"],
 }
 
+INSTALL_PROFILES = ("auto", "pinned", "runpod-pytorch", "runpod-vllm")
+
 
 REMOTE_WORKER = r"""
 import base64
@@ -93,6 +95,7 @@ def write_report(status, phase, **extra):
         "repo_url": cfg["repo_url"],
         "ref": cfg.get("ref") or None,
         "benchmark_command": cfg["benchmark_command"],
+        "install_profile": cfg.get("install_profile"),
         "preflight_command": cfg.get("preflight_command") or None,
         "install_command": cfg.get("install_command") or None,
         "artifacts": {
@@ -248,14 +251,41 @@ def default_benchmark_command(args: argparse.Namespace) -> str:
     return shlex.join(command)
 
 
+def resolve_install_profile(args: argparse.Namespace) -> str:
+    if args.install_profile != "auto":
+        return args.install_profile
+    if args.gpu == "h100":
+        return "runpod-vllm"
+    return "runpod-pytorch"
+
+
+def build_install_command(args: argparse.Namespace, python: str) -> str | None:
+    if args.skip_install:
+        return None
+
+    quoted_python = shlex.quote(python)
+    profile = resolve_install_profile(args)
+    if profile == "pinned":
+        return (
+            f"{quoted_python} -m pip install --upgrade pip && "
+            f"{quoted_python} -m pip install -r requirements.txt"
+        )
+    if profile == "runpod-pytorch":
+        return (
+            f"{quoted_python} -m pip install --upgrade pip && "
+            f"{quoted_python} -m pip install -r requirements-runpod.txt"
+        )
+    if profile == "runpod-vllm":
+        return (
+            f"{quoted_python} -m pip install --upgrade pip uv && "
+            "uv pip install --system vllm --torch-backend=auto"
+        )
+    raise ValueError(f"unknown install profile {profile!r}")
+
+
 def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
     python = args.python
-    install_command = None
-    if not args.skip_install:
-        install_command = (
-            f"{shlex.quote(python)} -m pip install --upgrade pip && "
-            f"{shlex.quote(python)} -m pip install -r requirements.txt"
-        )
+    install_command = build_install_command(args, python)
 
     preflight_command = None
     if not args.skip_preflight:
@@ -272,6 +302,7 @@ def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
         "artifacts_dir": "/workspace/mtp-runpod-artifacts",
         "repo_dir": "/workspace/mtp-benchmark",
         "install_command": install_command,
+        "install_profile": resolve_install_profile(args),
         "extra_setup_commands": args.extra_setup_command,
         "preflight_command": preflight_command,
         "benchmark_command": args.benchmark_command or default_benchmark_command(args),
@@ -493,6 +524,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--allowed-cuda", action="append", default=None)
     parser.add_argument("--data-center", action="append", default=None)
     parser.add_argument("--report-port", type=int, default=DEFAULT_REPORT_PORT)
+    parser.add_argument("--install-profile", choices=INSTALL_PROFILES, default="auto")
     parser.add_argument("--skip-install", action="store_true")
     parser.add_argument("--extra-setup-command", action="append", default=[])
     parser.add_argument("--skip-preflight", action="store_true")

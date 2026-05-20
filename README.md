@@ -165,3 +165,14 @@ python3 tools/runpod_benchmark.py --gpu h100 --benchmark-command "python3 -m ben
 
 If the selected RunPod image already has the exact CUDA stack installed, use
 `--skip-install` or add image-specific setup with `--extra-setup-command`.
+
+The launcher defaults to `--install-profile auto`:
+
+- `3090` / `4090`: uses `runpod-pytorch`, which keeps the PyTorch build already
+  present in the RunPod CUDA 12.8 image and installs only the benchmark extras
+  from `requirements-runpod.txt`.
+- `h100`: uses `runpod-vllm`, which installs vLLM with `uv pip install --system
+  vllm --torch-backend=auto` before running the FlashMLA path.
+
+Use `--install-profile pinned` to install the full local `requirements.txt`
+including `torch==2.12.0`.

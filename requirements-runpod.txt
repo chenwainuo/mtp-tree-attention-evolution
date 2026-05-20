@@ -1,0 +1,9 @@
+# Runtime dependencies for the default RunPod PyTorch image.
+#
+# The image already contains a CUDA-driver-compatible PyTorch build. Do not
+# reinstall `torch` here; doing so can pull CUDA 13 wheels onto hosts whose
+# driver only supports CUDA 12.8.
+
+flashinfer-python==0.6.7.post3
+huggingface-hub==1.14.0
+pytest==9.0.1

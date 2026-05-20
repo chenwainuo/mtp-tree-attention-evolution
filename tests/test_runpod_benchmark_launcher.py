@@ -28,6 +28,34 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
         self.assertIn("--gpu h100", command)
         self.assertIn("--flashmla-mode fp8-decode", command)
 
+    def test_auto_install_profile_tracks_gpu_path(self) -> None:
+        args = argparse.Namespace(gpu="4090", install_profile="auto")
+        self.assertEqual(runpod_benchmark.resolve_install_profile(args), "runpod-pytorch")
+
+        args = argparse.Namespace(gpu="h100", install_profile="auto")
+        self.assertEqual(runpod_benchmark.resolve_install_profile(args), "runpod-vllm")
+
+    def test_runpod_install_profile_does_not_reinstall_torch(self) -> None:
+        args = argparse.Namespace(
+            gpu="4090",
+            install_profile="runpod-pytorch",
+            skip_install=False,
+        )
+        command = runpod_benchmark.build_install_command(args, "python3")
+        self.assertIsNotNone(command)
+        self.assertIn("requirements-runpod.txt", command)
+        self.assertNotIn("requirements.txt", command)
+
+    def test_h100_install_profile_installs_vllm(self) -> None:
+        args = argparse.Namespace(
+            gpu="h100",
+            install_profile="runpod-vllm",
+            skip_install=False,
+        )
+        command = runpod_benchmark.build_install_command(args, "python3")
+        self.assertIsNotNone(command)
+        self.assertIn("uv pip install --system vllm --torch-backend=auto", command)
+
     def test_pod_payload_exposes_report_port_and_gpu_type(self) -> None:
         args = argparse.Namespace(
             gpu="4090",
