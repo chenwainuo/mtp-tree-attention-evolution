@@ -1,0 +1,15 @@
+# Stage 0/1 benchmark dependencies.
+#
+# Use Python 3.12 on Linux/WSL2 or a CUDA rental instance.
+# `torch` supplies the compatible Triton wheel on Linux x86_64; verify the exact
+# Triton version in the smoke test and freeze a lockfile after the first GPU run.
+# vLLM 0.19.0 / NVIDIA 26.04 reports flashinfer 0.6.7.post3.
+
+torch==2.12.0
+flashinfer-python==0.6.7.post3
+huggingface-hub==1.14.0
+pytest==9.0.1
+
+# Install/pin vLLM separately on the remote host once the exact v0.19.0 CUDA
+# wheel/source build target is confirmed. `bench_flashmla_sparse.py` and
+# `tools.extract_flashmla.py` require vLLM for the FlashMLA path.
