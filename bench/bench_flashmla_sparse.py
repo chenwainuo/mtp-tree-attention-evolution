@@ -116,13 +116,15 @@ def run_bf16_sparse_prefill(args: argparse.Namespace) -> None:
     assert_cuda_ready(torch)
     assert_hopper_or_blackwell(torch)
 
-    symbols = import_flashmla_symbols()
-    supported, reason = flashmla_support_status(symbols.module)
-    if not supported:
-        raise SystemExit(f"FlashMLA sparse is not supported on this host: {reason}")
-    if symbols.flash_mla_sparse_fwd is None:
-        raise SystemExit(f"`flash_mla_sparse_fwd` is not present in {symbols.module_name}")
-    ensure_sparse_prefill_signature(symbols.flash_mla_sparse_fwd)
+    symbols = None
+    if args.impl == "flashmla":
+        symbols = import_flashmla_symbols()
+        supported, reason = flashmla_support_status(symbols.module)
+        if not supported:
+            raise SystemExit(f"FlashMLA sparse is not supported on this host: {reason}")
+        if symbols.flash_mla_sparse_fwd is None:
+            raise SystemExit(f"`flash_mla_sparse_fwd` is not present in {symbols.module_name}")
+        ensure_sparse_prefill_signature(symbols.flash_mla_sparse_fwd)
 
     shapes = get_v4_flash_shapes()
     device = torch.device("cuda")
@@ -148,6 +150,24 @@ def run_bf16_sparse_prefill(args: argparse.Namespace) -> None:
     torch.cuda.synchronize()
 
     def run() -> Any:
+        if args.impl == "triton":
+            from bench.triton_sparse_prefill import triton_sparse_prefill
+
+            return triton_sparse_prefill(
+                torch,
+                triton,
+                q,
+                kv,
+                indices[:, 0, :].contiguous(),
+                sm_scale,
+                shapes.head_dim,
+                block_k=args.triton_block_k,
+                block_d=args.triton_block_d,
+                block_v=args.triton_block_v,
+                num_warps=args.triton_warps,
+            )
+
+        assert symbols is not None
         result = call_with_supported_kwargs(
             symbols.flash_mla_sparse_fwd,
             {
@@ -180,9 +200,20 @@ def run_bf16_sparse_prefill(args: argparse.Namespace) -> None:
         args.bandwidth_gbs,
     )
 
-    print("DeepSeek V4-Flash FlashMLA sparse BF16 prefill microbenchmark")
+    if args.impl == "triton":
+        print("DeepSeek V4-Flash Triton sparse BF16 prefill candidate")
+    else:
+        print("DeepSeek V4-Flash FlashMLA sparse BF16 prefill microbenchmark")
     print(f"Hardware: {torch.cuda.get_device_name()}")
-    print(f"FlashMLA module: {symbols.module_name}")
+    if args.impl == "flashmla":
+        assert symbols is not None
+        print(f"FlashMLA module: {symbols.module_name}")
+    else:
+        print(
+            "Triton config: "
+            f"block_k={args.triton_block_k}, block_d={args.triton_block_d}, "
+            f"block_v={args.triton_block_v}, warps={args.triton_warps}"
+        )
     print(
         "Shapes: "
         f"batch={args.batch}, ctx={args.ctx_len}, K_draft={args.k_draft}, "
@@ -336,12 +367,22 @@ def dry_run(args: argparse.Namespace) -> None:
     shapes = get_v4_flash_shapes()
     extra: dict[str, Any] = {
         "mode": args.mode,
+        "impl": args.impl,
         "heads": args.num_heads or shapes.num_attention_heads,
         "topk": args.topk,
         "block_size": args.block_size,
         "cache_bytes_per_token": args.cache_bytes_per_token,
         "requires": "Hopper/Blackwell FlashMLA sparse",
     }
+    if args.impl == "triton":
+        extra.update(
+            {
+                "triton_block_k": args.triton_block_k,
+                "triton_block_d": args.triton_block_d,
+                "triton_block_v": args.triton_block_v,
+                "triton_warps": args.triton_warps,
+            }
+        )
     if args.extraction_report:
         path = Path(args.extraction_report)
         if path.exists():
@@ -371,6 +412,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         choices=("bf16-prefill", "fp8-decode"),
         default="bf16-prefill",
     )
+    parser.add_argument(
+        "--impl",
+        choices=("flashmla", "triton"),
+        default="flashmla",
+        help="BF16 prefill implementation. FlashMLA remains the source-of-truth baseline.",
+    )
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--ctx-len", type=int, default=8192)
     parser.add_argument("--k-draft", type=int, default=4)
@@ -382,9 +429,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--extraction-report", default=None)
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--rep", type=int, default=100)
+    parser.add_argument("--triton-block-k", type=int, default=32)
+    parser.add_argument("--triton-block-d", type=int, default=64)
+    parser.add_argument("--triton-block-v", type=int, default=64)
+    parser.add_argument("--triton-warps", type=int, default=4)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
+    if args.mode != "bf16-prefill" and args.impl != "flashmla":
+        raise SystemExit("--impl triton is only implemented for --mode bf16-prefill")
     if args.dry_run:
         dry_run(args)
         return

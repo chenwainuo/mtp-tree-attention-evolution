@@ -52,6 +52,8 @@ def flashmla_args(args: argparse.Namespace) -> list[str]:
     result = [
         "--mode",
         args.flashmla_mode,
+        "--impl",
+        args.flashmla_impl,
         "--batch",
         str(args.batch),
         "--ctx-len",
@@ -68,6 +70,14 @@ def flashmla_args(args: argparse.Namespace) -> list[str]:
         str(args.warmup),
         "--rep",
         str(args.rep),
+        "--triton-block-k",
+        str(args.triton_block_k),
+        "--triton-block-d",
+        str(args.triton_block_d),
+        "--triton-block-v",
+        str(args.triton_block_v),
+        "--triton-warps",
+        str(args.triton_warps),
     ]
     if args.num_q_heads is not None:
         result.extend(["--num-heads", str(args.num_q_heads)])
@@ -104,10 +114,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         choices=("bf16-prefill", "fp8-decode"),
         default="bf16-prefill",
     )
+    parser.add_argument(
+        "--flashmla-impl",
+        choices=("flashmla", "triton"),
+        default="flashmla",
+        help="H100 BF16 prefill implementation. FlashMLA is the baseline.",
+    )
     parser.add_argument("--bandwidth-gbs", type=float, default=None)
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--rep", type=int, default=100)
     parser.add_argument("--workspace-mb", type=int, default=2048)
+    parser.add_argument("--triton-block-k", type=int, default=32)
+    parser.add_argument("--triton-block-d", type=int, default=64)
+    parser.add_argument("--triton-block-v", type=int, default=64)
+    parser.add_argument("--triton-warps", type=int, default=4)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 

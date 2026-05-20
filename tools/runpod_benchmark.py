@@ -258,6 +258,7 @@ def default_benchmark_command(args: argparse.Namespace) -> str:
     ]
     if args.gpu == "h100":
         command.extend(["--flashmla-mode", args.flashmla_mode])
+        command.extend(["--flashmla-impl", args.flashmla_impl])
     if args.remote_dry_run:
         command.append("--dry-run")
     command.extend(args.benchmark_extra)
@@ -557,6 +558,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-preflight", action="store_true")
     parser.add_argument("--remote-dry-run", action="store_true")
     parser.add_argument("--flashmla-mode", choices=("bf16-prefill", "fp8-decode"), default="bf16-prefill")
+    parser.add_argument("--flashmla-impl", choices=("flashmla", "triton"), default="flashmla")
     parser.add_argument("--benchmark-extra", action="append", default=[])
     parser.add_argument("--benchmark-command", default=None)
     parser.add_argument("--no-wait", action="store_true")

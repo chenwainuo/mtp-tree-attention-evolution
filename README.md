@@ -19,6 +19,12 @@ MTP chain-attention microbenchmark.
   remote CUDA host.
 - `bench/bench_flashmla_sparse.py` is the low-level FlashMLA sparse benchmark
   scaffold for BF16 sparse prefill and FP8 sparse decode.
+- H100 BF16 sparse prefill is the correctness-bearing baseline. The latest
+  verified RunPod H100 result was 23.29 us with PyTorch-reference correctness
+  PASS at the default shape.
+- `tools/evolve_h100.py` runs a bounded H100 candidate loop against that BF16
+  correctness gate and stops on the first speedup that clears the configured
+  threshold.
 
 ## Environment
 
@@ -114,6 +120,7 @@ Then run the low-level FlashMLA sparse smoke/speed benchmarks:
 python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill
 python -m bench.run_benchmark --gpu h100 --flashmla-mode fp8-decode
 python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --dry-run
+python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --flashmla-impl triton --dry-run
 python -m bench.bench_flashmla_sparse --mode bf16-prefill
 python -m bench.bench_flashmla_sparse --mode fp8-decode
 ```
@@ -179,3 +186,25 @@ The launcher defaults to `--install-profile auto`:
 
 Use `--install-profile pinned` to install the full local `requirements.txt`
 including `torch==2.12.0`.
+
+## H100 Evolution Loop
+
+Use the evolution loop only after pushing the candidate branch, because RunPod
+clones this public repository by `--ref`.
+
+Preview planned candidates without creating pods:
+
+```bash
+python3 tools/evolve_h100.py --local-dry-run --max-candidates 2 --ref main
+```
+
+Run a bounded remote loop. By default pods are terminated after each candidate:
+
+```bash
+python3 tools/evolve_h100.py --ref main --baseline-us 23.29 --max-candidates 5
+```
+
+The loop parses each candidate's `Correctness:` and `Runtime:` lines from
+RunPod artifacts. Candidates only count if BF16 correctness reports `PASS`; FP8
+decode remains smoke/speed-only until a packed-cache correctness reference is
+implemented.

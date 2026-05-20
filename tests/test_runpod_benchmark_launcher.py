@@ -21,12 +21,14 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
             python="python3",
             gpu="h100",
             flashmla_mode="fp8-decode",
+            flashmla_impl="flashmla",
             remote_dry_run=False,
             benchmark_extra=[],
         )
         command = runpod_benchmark.default_benchmark_command(args)
         self.assertIn("--gpu h100", command)
         self.assertIn("--flashmla-mode fp8-decode", command)
+        self.assertIn("--flashmla-impl flashmla", command)
 
     def test_auto_install_profile_tracks_gpu_path(self) -> None:
         args = argparse.Namespace(gpu="4090", install_profile="auto")
@@ -69,6 +71,7 @@ class RunpodBenchmarkLauncherTests(unittest.TestCase):
             extra_setup_command=[],
             benchmark_command=None,
             flashmla_mode="bf16-prefill",
+            flashmla_impl="flashmla",
             benchmark_extra=[],
         )
         config = runpod_benchmark.build_remote_config(args)
