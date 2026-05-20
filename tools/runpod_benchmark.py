@@ -94,6 +94,9 @@ def write_report(status, phase, **extra):
     if cfg.get("extract_flashmla_command"):
         artifacts["flashmla_extraction_json"] = "flashmla_extraction.json"
         artifacts["flashmla_extraction_md"] = "flashmla_extraction.md"
+    for optional_artifact in ("candidate_summary.json",):
+        if (artifacts_dir / optional_artifact).exists():
+            artifacts[optional_artifact.removesuffix(".json")] = optional_artifact
     payload = {
         "status": status,
         "phase": phase,

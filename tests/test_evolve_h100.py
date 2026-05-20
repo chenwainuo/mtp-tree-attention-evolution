@@ -63,6 +63,25 @@ class EvolveH100Tests(unittest.TestCase):
         self.assertIn("--triton-block-k 32", benchmark_command)
         self.assertIn("--rep 7", benchmark_command)
 
+    def test_sweep_command_includes_all_candidates(self) -> None:
+        candidates = [
+            evolve_h100.Candidate("a", 16, 64, 64, 4),
+            evolve_h100.Candidate("b", 32, 64, 128, 8),
+        ]
+        command = evolve_h100.sweep_benchmark_command(
+            candidates,
+            python="python3",
+            baseline_us=23.29,
+            min_speedup_pct=2.0,
+            warmup=3,
+            rep=5,
+            max_candidates=2,
+        )
+        self.assertIn("tools.h100_candidate_sweep", command)
+        self.assertIn("name=a,k=16,d=64,v=64,warps=4", command)
+        self.assertIn("name=b,k=32,d=64,v=128,warps=8", command)
+        self.assertIn("--rep 5", command)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -203,6 +204,86 @@ def build_runpod_command(
     return command, benchmark_command
 
 
+def candidate_spec(candidate: Candidate) -> str:
+    return (
+        f"name={candidate.name},k={candidate.block_k},d={candidate.block_d},"
+        f"v={candidate.block_v},warps={candidate.warps}"
+    )
+
+
+def sweep_benchmark_command(
+    candidates: list[Candidate],
+    *,
+    python: str,
+    baseline_us: float,
+    min_speedup_pct: float,
+    warmup: int,
+    rep: int,
+    max_candidates: int,
+) -> str:
+    parts = [
+        python,
+        "-m",
+        "tools.h100_candidate_sweep",
+        "--baseline-us",
+        f"{baseline_us:.6g}",
+        "--min-speedup-pct",
+        f"{min_speedup_pct:.6g}",
+        "--max-candidates",
+        str(max_candidates),
+        "--warmup",
+        str(warmup),
+        "--rep",
+        str(rep),
+    ]
+    for candidate in candidates:
+        parts.extend(["--candidate", candidate_spec(candidate)])
+    return shlex.join(parts)
+
+
+def build_sweep_runpod_command(
+    candidates: list[Candidate],
+    args: argparse.Namespace,
+    sweep_output_dir: Path,
+) -> tuple[list[str], str]:
+    benchmark_command = sweep_benchmark_command(
+        candidates,
+        python=args.python,
+        baseline_us=args.baseline_us,
+        min_speedup_pct=args.min_speedup_pct,
+        warmup=args.warmup,
+        rep=args.rep,
+        max_candidates=args.max_candidates,
+    )
+    command = [
+        args.python,
+        str(args.repo_root / "tools" / "runpod_benchmark.py"),
+        "--gpu",
+        "h100",
+        "--flashmla-mode",
+        "bf16-prefill",
+        "--ref",
+        args.ref,
+        "--repo-url",
+        args.repo_url,
+        "--env-file",
+        str(args.env_file),
+        "--timeout-minutes",
+        str(args.timeout_minutes),
+        "--poll-seconds",
+        str(args.poll_seconds),
+        "--output-dir",
+        str(sweep_output_dir),
+        "--name",
+        "mtp-evolve-h100-sweep",
+        "--benchmark-command",
+        benchmark_command,
+    ]
+    if not args.keep_pods:
+        command.append("--terminate-on-complete")
+    return command, benchmark_command
+
+
 def latest_run_dir(output_dir: Path) -> Path | None:
     candidates = [path for path in output_dir.glob("runpod-*") if path.is_dir()]
     if not candidates:
@@ -264,6 +345,9 @@ def write_summary(path: Path, payload: dict[str, Any]) -> None:
 
 
 def run_loop(args: argparse.Namespace) -> int:
+    if not args.per_candidate_pods:
+        return run_sweep(args)
+
     selected = args.candidate or default_candidates()
     selected = selected[: args.max_candidates]
     session_dir = args.output_dir / datetime.now(timezone.utc).strftime("evolve-h100-%Y%m%d-%H%M%S")
@@ -333,6 +417,66 @@ def run_loop(args: argparse.Namespace) -> int:
     return 0 if args.local_dry_run else 1
 
 
+def run_sweep(args: argparse.Namespace) -> int:
+    selected = (args.candidate or default_candidates())[: args.max_candidates]
+    session_dir = args.output_dir / datetime.now(timezone.utc).strftime("evolve-h100-%Y%m%d-%H%M%S")
+    sweep_output_dir = session_dir / "sweep"
+    summary_path = session_dir / "summary.json"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    sweep_output_dir.mkdir(parents=True, exist_ok=True)
+
+    command, benchmark_command = build_sweep_runpod_command(selected, args, sweep_output_dir)
+    payload: dict[str, Any] = {
+        "baseline_us": args.baseline_us,
+        "min_speedup_pct": args.min_speedup_pct,
+        "ref": args.ref,
+        "mode": "single-pod-sweep",
+        "status": "planned" if args.local_dry_run else "running",
+        "command": command,
+        "benchmark_command": benchmark_command,
+    }
+    write_summary(summary_path, payload)
+
+    print(f"Evolution session: {session_dir}")
+    print(f"Baseline: {args.baseline_us:.2f} us; target speedup: {args.min_speedup_pct:.2f}%")
+    print(f"Candidates in one H100 pod: {len(selected)}")
+    print(f"Benchmark command: {benchmark_command}")
+
+    if args.local_dry_run:
+        print(f"Summary: {summary_path}")
+        return 0
+
+    completed = subprocess.run(command, cwd=args.repo_root, check=False)
+    payload["returncode"] = completed.returncode
+    run_dir = latest_run_dir(sweep_output_dir)
+    payload["run_dir"] = None if run_dir is None else str(run_dir)
+
+    if run_dir is None:
+        payload["status"] = "failed"
+        payload["reason"] = "no RunPod artifact directory was created"
+        write_summary(summary_path, payload)
+        print(f"Summary: {summary_path}")
+        return 1
+
+    report_path = run_dir / "report.json"
+    remote_summary_path = run_dir / "candidate_summary.json"
+    if report_path.exists():
+        payload["report"] = json.loads(report_path.read_text())
+    if remote_summary_path.exists():
+        remote_summary = json.loads(remote_summary_path.read_text())
+        payload["remote_summary"] = remote_summary
+        payload["status"] = remote_summary.get("status", "unknown")
+        if remote_summary.get("winner"):
+            payload["winner"] = remote_summary["winner"]
+    else:
+        payload["status"] = "failed"
+        payload["reason"] = "candidate_summary.json was not collected"
+
+    write_summary(summary_path, payload)
+    print(f"Summary: {summary_path}")
+    return 0 if payload.get("status") == "improved" else 1
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -350,6 +494,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=int, default=15)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/evolve_h100"))
     parser.add_argument("--keep-pods", action="store_true")
+    parser.add_argument(
+        "--per-candidate-pods",
+        action="store_true",
+        help="Create a fresh pod for each candidate. Default is one pod for the sweep.",
+    )
     parser.add_argument("--local-dry-run", action="store_true")
     args = parser.parse_args(argv)
     args.repo_root = args.repo_root.resolve()

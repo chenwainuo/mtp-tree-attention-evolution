@@ -198,7 +198,8 @@ Preview planned candidates without creating pods:
 python3 tools/evolve_h100.py --local-dry-run --max-candidates 2 --ref main
 ```
 
-Run a bounded remote loop. By default pods are terminated after each candidate:
+Run a bounded remote loop. By default all candidates run inside one H100 pod and
+the pod is terminated after the sweep:
 
 ```bash
 python3 tools/evolve_h100.py --ref main --baseline-us 23.29 --max-candidates 5
