@@ -152,6 +152,8 @@ class BenchmarkDryRunTests(unittest.TestCase):
             run_benchmark.main(["--gpu", "h100", "--flashmla-impl", "triton", "--dry-run"])
         output = stream.getvalue()
         self.assertIn("impl: triton", output)
+        self.assertIn("triton_layout: grouped", output)
+        self.assertIn("triton_block_h: 16", output)
         self.assertIn("triton_block_k: 32", output)
 
 

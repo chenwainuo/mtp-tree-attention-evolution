@@ -165,6 +165,8 @@ def run_bf16_sparse_prefill(args: argparse.Namespace) -> None:
                 block_d=args.triton_block_d,
                 block_v=args.triton_block_v,
                 num_warps=args.triton_warps,
+                layout=args.triton_layout,
+                block_h=args.triton_block_h,
             )
 
         assert symbols is not None
@@ -211,6 +213,7 @@ def run_bf16_sparse_prefill(args: argparse.Namespace) -> None:
     else:
         print(
             "Triton config: "
+            f"layout={args.triton_layout}, block_h={args.triton_block_h}, "
             f"block_k={args.triton_block_k}, block_d={args.triton_block_d}, "
             f"block_v={args.triton_block_v}, warps={args.triton_warps}"
         )
@@ -380,6 +383,8 @@ def dry_run(args: argparse.Namespace) -> None:
                 "triton_block_k": args.triton_block_k,
                 "triton_block_d": args.triton_block_d,
                 "triton_block_v": args.triton_block_v,
+                "triton_block_h": args.triton_block_h,
+                "triton_layout": args.triton_layout,
                 "triton_warps": args.triton_warps,
             }
         )
@@ -432,6 +437,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--triton-block-k", type=int, default=32)
     parser.add_argument("--triton-block-d", type=int, default=64)
     parser.add_argument("--triton-block-v", type=int, default=64)
+    parser.add_argument("--triton-block-h", type=int, default=16)
+    parser.add_argument("--triton-layout", choices=("scalar", "grouped"), default="grouped")
     parser.add_argument("--triton-warps", type=int, default=4)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

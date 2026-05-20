@@ -17,8 +17,10 @@ class EvolveH100Tests(unittest.TestCase):
         self.assertTrue(evolve_h100.correctness_passed(correctness))
 
     def test_parse_candidate_spec(self) -> None:
-        candidate = evolve_h100.parse_candidate_spec("k=32,d=64,v=128,warps=8")
-        self.assertEqual(candidate.name, "triton-k32-d64-v128-w8")
+        candidate = evolve_h100.parse_candidate_spec("layout=grouped,h=32,k=32,d=64,v=128,warps=8")
+        self.assertEqual(candidate.name, "triton-grouped-h32-k32-d64-v128-w8")
+        self.assertEqual(candidate.layout, "grouped")
+        self.assertEqual(candidate.block_h, 32)
         self.assertEqual(candidate.block_k, 32)
         self.assertEqual(candidate.block_d, 64)
         self.assertEqual(candidate.block_v, 128)
@@ -45,6 +47,8 @@ class EvolveH100Tests(unittest.TestCase):
             )
             candidate = evolve_h100.Candidate(
                 name="triton-k32-d64-v64-w4",
+                layout="grouped",
+                block_h=16,
                 block_k=32,
                 block_d=64,
                 block_v=64,
@@ -60,13 +64,15 @@ class EvolveH100Tests(unittest.TestCase):
         self.assertIn("--ref", command)
         self.assertIn("abc123", command)
         self.assertIn("--flashmla-impl triton", benchmark_command)
+        self.assertIn("--triton-layout grouped", benchmark_command)
+        self.assertIn("--triton-block-h 16", benchmark_command)
         self.assertIn("--triton-block-k 32", benchmark_command)
         self.assertIn("--rep 7", benchmark_command)
 
     def test_sweep_command_includes_all_candidates(self) -> None:
         candidates = [
-            evolve_h100.Candidate("a", 16, 64, 64, 4),
-            evolve_h100.Candidate("b", 32, 64, 128, 8),
+            evolve_h100.Candidate("a", "grouped", 16, 16, 64, 64, 4),
+            evolve_h100.Candidate("b", "grouped", 32, 32, 64, 128, 8),
         ]
         command = evolve_h100.sweep_benchmark_command(
             candidates,
@@ -78,8 +84,8 @@ class EvolveH100Tests(unittest.TestCase):
             max_candidates=2,
         )
         self.assertIn("tools.h100_candidate_sweep", command)
-        self.assertIn("name=a,k=16,d=64,v=64,warps=4", command)
-        self.assertIn("name=b,k=32,d=64,v=128,warps=8", command)
+        self.assertIn("name=a,layout=grouped,h=16,k=16,d=64,v=64,warps=4", command)
+        self.assertIn("name=b,layout=grouped,h=32,k=32,d=64,v=128,warps=8", command)
         self.assertIn("--rep 5", command)
 
 

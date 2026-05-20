@@ -121,6 +121,7 @@ python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill
 python -m bench.run_benchmark --gpu h100 --flashmla-mode fp8-decode
 python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --dry-run
 python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --flashmla-impl triton --dry-run
+python -m bench.run_benchmark --gpu h100 --flashmla-mode bf16-prefill --flashmla-impl triton --triton-layout grouped
 python -m bench.bench_flashmla_sparse --mode bf16-prefill
 python -m bench.bench_flashmla_sparse --mode fp8-decode
 ```

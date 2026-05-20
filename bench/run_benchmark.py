@@ -76,6 +76,10 @@ def flashmla_args(args: argparse.Namespace) -> list[str]:
         str(args.triton_block_d),
         "--triton-block-v",
         str(args.triton_block_v),
+        "--triton-block-h",
+        str(args.triton_block_h),
+        "--triton-layout",
+        args.triton_layout,
         "--triton-warps",
         str(args.triton_warps),
     ]
@@ -127,6 +131,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--triton-block-k", type=int, default=32)
     parser.add_argument("--triton-block-d", type=int, default=64)
     parser.add_argument("--triton-block-v", type=int, default=64)
+    parser.add_argument("--triton-block-h", type=int, default=16)
+    parser.add_argument("--triton-layout", choices=("scalar", "grouped"), default="grouped")
     parser.add_argument("--triton-warps", type=int, default=4)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)

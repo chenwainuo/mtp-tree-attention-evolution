@@ -25,11 +25,11 @@ from typing import Any
 
 DEFAULT_BASELINE_US = 23.29
 DEFAULT_CANDIDATES = (
-    (16, 64, 64, 4),
-    (32, 64, 64, 4),
-    (64, 64, 64, 4),
-    (32, 128, 64, 4),
-    (32, 64, 128, 8),
+    ("grouped", 16, 32, 64, 64, 4),
+    ("grouped", 32, 32, 64, 64, 4),
+    ("grouped", 64, 32, 64, 64, 4),
+    ("grouped", 32, 64, 64, 128, 8),
+    ("grouped", 64, 64, 64, 128, 8),
 )
 
 RUNTIME_RE = re.compile(r"^Runtime:\s*([0-9]+(?:\.[0-9]+)?)\s*us\s*$", re.MULTILINE)
@@ -39,6 +39,8 @@ CORRECTNESS_RE = re.compile(r"^Correctness:\s*(.+?)\s*$", re.MULTILINE)
 @dataclass(frozen=True)
 class Candidate:
     name: str
+    layout: str
+    block_h: int
     block_k: int
     block_d: int
     block_v: int
@@ -63,8 +65,17 @@ def is_power_of_two(value: int) -> bool:
     return value > 0 and value & (value - 1) == 0
 
 
-def candidate_name(block_k: int, block_d: int, block_v: int, warps: int) -> str:
-    return f"triton-k{block_k}-d{block_d}-v{block_v}-w{warps}"
+def candidate_name(
+    layout: str,
+    block_h: int,
+    block_k: int,
+    block_d: int,
+    block_v: int,
+    warps: int,
+) -> str:
+    if layout == "scalar":
+        return f"triton-scalar-k{block_k}-d{block_d}-v{block_v}-w{warps}"
+    return f"triton-grouped-h{block_h}-k{block_k}-d{block_d}-v{block_v}-w{warps}"
 
 
 def parse_candidate_spec(spec: str) -> Candidate:
@@ -80,13 +91,20 @@ def parse_candidate_spec(spec: str) -> Candidate:
             )
         values[key.strip().lower()] = value.strip()
 
-    aliases = {"block_k": "k", "block_d": "d", "block_v": "v", "w": "warps"}
+    aliases = {
+        "block_h": "h",
+        "block_k": "k",
+        "block_d": "d",
+        "block_v": "v",
+        "w": "warps",
+    }
     normalized = {aliases.get(key, key): value for key, value in values.items()}
     missing = {"k", "d", "v", "warps"} - normalized.keys()
     if missing:
         raise argparse.ArgumentTypeError(f"candidate spec missing {sorted(missing)}")
 
     try:
+        block_h = int(normalized.get("h", "16"))
         block_k = int(normalized["k"])
         block_d = int(normalized["d"])
         block_v = int(normalized["v"])
@@ -94,26 +112,46 @@ def parse_candidate_spec(spec: str) -> Candidate:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"candidate values must be integers: {spec}") from exc
 
-    for label, value in (("k", block_k), ("d", block_d), ("v", block_v)):
+    for label, value in (("h", block_h), ("k", block_k), ("d", block_d), ("v", block_v)):
         if not is_power_of_two(value):
             raise argparse.ArgumentTypeError(f"candidate {label} must be a power of two")
     if warps <= 0:
         raise argparse.ArgumentTypeError("candidate warps must be positive")
 
-    name = normalized.get("name") or candidate_name(block_k, block_d, block_v, warps)
-    return Candidate(name=name, block_k=block_k, block_d=block_d, block_v=block_v, warps=warps)
+    layout = normalized.get("layout", "grouped")
+    if layout not in {"scalar", "grouped"}:
+        raise argparse.ArgumentTypeError("candidate layout must be scalar or grouped")
+    name = normalized.get("name") or candidate_name(
+        layout,
+        block_h,
+        block_k,
+        block_d,
+        block_v,
+        warps,
+    )
+    return Candidate(
+        name=name,
+        layout=layout,
+        block_h=block_h,
+        block_k=block_k,
+        block_d=block_d,
+        block_v=block_v,
+        warps=warps,
+    )
 
 
 def default_candidates() -> list[Candidate]:
     return [
         Candidate(
-            name=candidate_name(block_k, block_d, block_v, warps),
+            name=candidate_name(layout, block_h, block_k, block_d, block_v, warps),
+            layout=layout,
+            block_h=block_h,
             block_k=block_k,
             block_d=block_d,
             block_v=block_v,
             warps=warps,
         )
-        for block_k, block_d, block_v, warps in DEFAULT_CANDIDATES
+        for layout, block_h, block_k, block_d, block_v, warps in DEFAULT_CANDIDATES
     ]
 
 
@@ -146,6 +184,10 @@ def benchmark_command_for_candidate(
         "bf16-prefill",
         "--flashmla-impl",
         "triton",
+        "--triton-layout",
+        candidate.layout,
+        "--triton-block-h",
+        str(candidate.block_h),
         "--triton-block-k",
         str(candidate.block_k),
         "--triton-block-d",
@@ -206,7 +248,8 @@ def build_runpod_command(
 
 def candidate_spec(candidate: Candidate) -> str:
     return (
-        f"name={candidate.name},k={candidate.block_k},d={candidate.block_d},"
+        f"name={candidate.name},layout={candidate.layout},h={candidate.block_h},"
+        f"k={candidate.block_k},d={candidate.block_d},"
         f"v={candidate.block_v},warps={candidate.warps}"
     )
 
