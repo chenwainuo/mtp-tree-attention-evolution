@@ -55,6 +55,7 @@ import pathlib
 import shutil
 import shlex
 import subprocess
+import time
 from datetime import datetime, timezone
 
 
@@ -172,6 +173,13 @@ def run_step(name, command, *, cwd=None, shell=False):
         raise StepFailed(name, exit_code)
 
 
+def hold_terminal_report():
+    seconds = int(cfg.get("terminal_hold_seconds") or 0)
+    if seconds > 0:
+        append_log(f"Holding terminal report for {seconds}s")
+        time.sleep(seconds)
+
+
 def main():
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     output_path.write_text("", encoding="utf-8")
@@ -209,12 +217,15 @@ def main():
         run_step("benchmark", cfg["benchmark_command"], cwd=repo_dir, shell=True)
     except StepFailed as exc:
         write_report("failed", f"failed {exc.name}", exit_code=exc.exit_code, error=str(exc))
+        hold_terminal_report()
         return 0
     except Exception as exc:
         write_report("failed", "failed", exit_code=1, error=f"{type(exc).__name__}: {exc}")
+        hold_terminal_report()
         return 0
 
     write_report("succeeded", "complete", exit_code=0)
+    hold_terminal_report()
     return 0
 
 
@@ -345,6 +356,7 @@ def build_remote_config(args: argparse.Namespace) -> dict[str, Any]:
         "preflight_command": preflight_command,
         "extract_flashmla_command": extract_flashmla_command,
         "benchmark_command": args.benchmark_command or default_benchmark_command(args),
+        "terminal_hold_seconds": getattr(args, "terminal_hold_seconds", 600),
     }
 
 
@@ -582,6 +594,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-wait", action="store_true")
     parser.add_argument("--timeout-minutes", type=int, default=120)
     parser.add_argument("--poll-seconds", type=int, default=15)
+    parser.add_argument("--terminal-hold-seconds", type=int, default=600)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runpod"))
     parser.add_argument("--terminate-on-complete", action="store_true")
     parser.add_argument(
