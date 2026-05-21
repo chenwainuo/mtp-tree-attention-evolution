@@ -301,18 +301,51 @@ Status: exhausted, no candidate reached 15%
 Best new candidate: sm90_prefill_sync_order_regs
 ```
 
+### No-Topk-Length Mask Elimination Sweeps
+
+The benchmark shape has `topk_length == nullptr` and generated sparse indices are valid. Two follow-up sweeps tested whether the no-topk-length instantiation can skip validity masking work while preserving the `HAVE_TOPK_LENGTH` path.
+
+First no-mask sweep:
+
+```text
+Artifact:
+artifacts/evolve_flashmla/evolve-flashmla-20260521-204511/runpod/runpod-c2g60k74mopz6f-20260521-211510/candidate_summary.json
+
+source-noop: 28.19 us, PASS
+sm90_prefill_no_topklen_nomask_single_wait: 25.68 us, PASS, +8.904% vs source
+sm90_prefill_no_topklen_assume_valid: 25.96 us, PASS, +7.911% vs source
+sm90_prefill_no_topklen_assume_valid_sync_order: 24.85 us, PASS, +11.848% vs source
+sm90_prefill_sync_order_regs: 27.67 us, PASS, +1.845% vs source
+Status: exhausted, no candidate reached 15%
+```
+
+Follow-up no-mask plus sync-order sweep:
+
+```text
+Artifact:
+artifacts/evolve_flashmla/evolve-flashmla-20260521-211706/runpod/runpod-590ly0ews6tsoy-20260521-213304/candidate_summary.json
+
+source-noop: 28.14 us, PASS
+sm90_prefill_no_topklen_nomask_sync_order: 24.98 us, PASS, +11.230% vs source
+sm90_prefill_no_topklen_assume_valid_sync_order: 24.84 us, PASS, +11.727% vs source
+sm90_prefill_no_topklen_nomask_single_wait: 25.77 us, PASS, +8.422% vs source
+Status: exhausted, no candidate reached 15%
+```
+
+These two sweeps ran on slow H100 hosts whose source no-op runtime was about 28 us, so their absolute runtimes are not comparable to the earlier 22.74 us best absolute run. The useful signal is the in-run relative delta: removing no-topk-length mask work is real and repeatable, reaching about 11.7-11.8% relative speedup, but still below the 15% stretch target.
+
 ## Important Artifacts
 
 Latest complete candidate run:
 
 ```text
-artifacts/evolve_flashmla/evolve-flashmla-20260521-194436/runpod/runpod-p9fyetcfn76d9y-20260521-200407/
+artifacts/evolve_flashmla/evolve-flashmla-20260521-211706/runpod/runpod-590ly0ews6tsoy-20260521-213304/
 ```
 
 Most important file:
 
 ```text
-artifacts/evolve_flashmla/evolve-flashmla-20260521-194436/runpod/runpod-p9fyetcfn76d9y-20260521-200407/candidate_summary.json
+artifacts/evolve_flashmla/evolve-flashmla-20260521-211706/runpod/runpod-590ly0ews6tsoy-20260521-213304/candidate_summary.json
 ```
 
 Useful supporting artifacts:
@@ -348,12 +381,12 @@ Current pain points:
 
 ```text
 Each remote run rebuilds the no-op source overlay.
-Each candidate reclones vLLM and FlashMLA.
-Each candidate reruns full CMake configure.
+Candidate sweeps now reuse one vLLM/FlashMLA source tree and CMake build dir.
+Incremental candidate rebuilds compile 5 FlashMLA objects instead of 29 after the cold no-op build.
 The CMake configure still processes the broader vLLM tree even though the build target is FlashMLA-only.
 ```
 
-The latest accepted run took about 11 minutes wall-clock for no-op plus one accepted candidate. Earlier runs were longer when the loop did full editable vLLM install.
+The latest reuse-tree sweep completed no-op plus three candidates in about 15 minutes wall-clock. Earlier candidate loops were slower because every candidate recloned vLLM and FlashMLA.
 
 There is also still no FP8 packed-cache correctness gate. That means BF16 sparse prefill is the only correctness-bearing optimization target today, even though FP8 decode is important for the final V4 production path.
 
@@ -363,25 +396,22 @@ During the 15% stretch attempt, several RunPod source-loop pods exited before th
 9e9882b1b2e7dbc3f88ee5c24b73241b30028df5
 ```
 
-The next H100 run is blocked on RunPod account balance; there are no active leftover pods.
+There are no active leftover pods after the latest sweeps.
 
 ## Next Engineering Steps
 
 Recommended next loop-infrastructure work:
 
-1. Reuse one cloned vLLM/FlashMLA source tree inside a pod.
-2. Build no-op once, then reset/apply candidates in the same source tree.
-3. Reuse CMake build directories where possible.
-4. Avoid rerunning no-op for every single candidate when multiple candidates are evaluated in one pod.
-5. Add `--max-candidates > 1` workflow that actually amortizes setup/build cost.
-6. Add clearer patch validation before remote execution, including `git apply --check` against the pinned FlashMLA commit.
-7. Improve resilience/report recovery for pods whose artifact HTTP endpoint returns 404 mid-run; the 200-rep confirmation attempt for `sm90_prefill_single_mask_wait` lost its report endpoint before producing usable timing and was manually terminated.
+1. Tighten the vLLM CMake patch further so the configure step stops generating unrelated Marlin/Machete/MOE extension metadata when `MTP_FLASHMLA_ONLY_BUILD=1`.
+2. Add a no-op rerun after each candidate or randomized candidate order when a host source no-op drifts above 20%, so relative speedups are less sensitive to host variance.
+3. Add clearer patch validation before remote execution, including `git apply --check` against the pinned FlashMLA commit.
+4. Improve resilience/report recovery for pods whose artifact HTTP endpoint returns 404 mid-run; the 200-rep confirmation attempt for `sm90_prefill_single_mask_wait` lost its report endpoint before producing usable timing and was manually terminated.
 
 Recommended next kernel-candidate directions:
 
 1. Avoid changing `B_TOPK` upward without first computing shared-memory size and launch limits.
 2. Treat loop unrolling and static top-k specialization as poor candidates for this kernel; both were correct but roughly 2x slower in the 15% sweep.
-3. Test a no-topk-length hot-path assumption for the benchmark shape: every generated sparse index is valid, so the no-topk-length instantiation can skip consumer-side validity masking and possibly producer-side validity predicates while preserving the `HAVE_TOPK_LENGTH` path.
+3. No-topk-length mask elimination is useful but insufficient by itself; the best repeatable relative speedup is about 11.8%, still short of 15%.
 4. Investigate whether the SM100 sources contain useful scheduling ideas that can be safely backported to SM90 prefill.
 5. Add instrumentation or static reporting for `sizeof(SharedMemoryPlan)` by candidate to reject impossible kernels locally before remote runtime.
 
@@ -393,6 +423,6 @@ Implement FP8 decode correctness for the packed-cache layout so the loop can opt
 
 ## Current Bottom Line
 
-The source-build FlashMLA optimization loop is functional and validated on H100. The current best source-built kernel is `sm90_prefill_sync_order_regs`, which passed BF16 sparse prefill correctness and improved runtime from 23.70 us to 22.74 us in the latest 15% sweep.
+The source-build FlashMLA optimization loop is functional and validated on H100. The best absolute runtime is still `sm90_prefill_sync_order_regs` at 22.74 us from the normal-speed sweep. The best relative no-topk-length candidate is `sm90_prefill_no_topklen_assume_valid_sync_order`, which reached 11.7-11.8% in-run speedup on two slow-host sweeps.
 
-The immediate kernel bottleneck is higher-upside candidate validation toward the 15% stretch target. RunPod credit availability was restored enough to complete the latest secure H100 sweep.
+The immediate kernel bottleneck is now beyond mask/barrier cleanup; reaching 15% likely needs a scheduling or work-reduction change deeper than local validity-mask removal.
