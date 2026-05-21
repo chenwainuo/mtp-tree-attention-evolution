@@ -4,6 +4,8 @@
 
 The project goal is to make the real DeepSeek V4 production FlashMLA path faster. The current optimization target is vLLM's FlashMLA sparse backend on H100, not Triton comparison kernels and not 3090/4090 proxy paths.
 
+After accepting the initial 2% source-build candidate, the active stretch target is now a correctness-passing 15% speedup vs the H100 source-build no-op baseline.
+
 The current correctness-bearing target is H100 BF16 sparse prefill:
 
 ```bash
@@ -232,6 +234,35 @@ patches/flashmla/bf16_prefill/sm90_prefill_regs224.patch
 patches/flashmla/bf16_prefill/sm90_prefill_sync_order_regs.patch
 ```
 
+### `sm90_prefill_static_topk512_single_wait_unroll4`
+
+Patch:
+
+```text
+patches/flashmla/bf16_prefill/sm90_prefill_static_topk512_single_wait_unroll4.patch
+```
+
+Intent:
+
+```text
+Specialize the hot D_QK=576/no-topk-length/topk=512 dispatch path with a static 8-block top-k loop, keep the generic fallback for other top-k values, and combine that with the accepted duplicate-mask-wait removal plus top-k loop unroll hints.
+```
+
+Local validation:
+
+```text
+git apply --check against pinned FlashMLA source: PASS
+Python compile: PASS
+Unit tests: PASS (36 tests)
+```
+
+Remote result:
+
+```text
+Status: not measured yet
+Reason: RunPod refused new H100 pods with "account balance is too low to rent a pod" before a post-runner-fix H100 measurement could start.
+```
+
 ## Important Artifacts
 
 Latest complete candidate run:
@@ -288,6 +319,14 @@ The latest accepted run took about 11 minutes wall-clock for no-op plus one acce
 
 There is also still no FP8 packed-cache correctness gate. That means BF16 sparse prefill is the only correctness-bearing optimization target today, even though FP8 decode is important for the final V4 production path.
 
+During the 15% stretch attempt, several RunPod source-loop pods exited before the local poller could collect terminal artifacts. `tools/runpod_benchmark.py` now keeps the remote Python worker alive for a configurable terminal-report hold window after writing a succeeded/failed report, instead of relying only on the trailing shell sleep. The fix is committed in:
+
+```text
+9e9882b1b2e7dbc3f88ee5c24b73241b30028df5
+```
+
+The next H100 run is blocked on RunPod account balance; there are no active leftover pods.
+
 ## Next Engineering Steps
 
 Recommended next loop-infrastructure work:
@@ -318,4 +357,4 @@ Implement FP8 decode correctness for the packed-cache layout so the loop can opt
 
 The source-build FlashMLA optimization loop is functional and validated on H100. The current best source-built kernel is `sm90_prefill_single_mask_wait`, which passed BF16 sparse prefill correctness and improved runtime from 23.46 us to 22.90 us in the accepted run.
 
-The immediate bottleneck is no longer missing infrastructure. The next gains require confirming robustness with repeat timing, testing the queued candidates that the early-stop run skipped, and making candidate iteration faster inside one pod.
+The immediate kernel bottleneck is higher-upside candidate validation toward the 15% stretch target. The immediate execution blocker is RunPod credit availability for the next H100 run.
