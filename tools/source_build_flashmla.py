@@ -19,7 +19,7 @@ DEFAULT_VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DEFAULT_FLASHMLA_REPO = "https://github.com/vllm-project/FlashMLA.git"
 FLASHMLA_CONFIG_PATH = Path("csrc/sm90/prefill/sparse/config.h")
 EXPECTED_B_TOPK = "static constexpr int B_TOPK = 64;    // TopK block size"
-EXPECTED_TEMPLATE = "template<int D_QK, bool HAVE_TOPK_LENGTH>"
+EXPECTED_TEMPLATE = "template<int D_QK, bool HAVE_TOPK_LENGTH"
 FLASHMLA_TAG_RE = re.compile(r"GIT_TAG\s+([0-9a-fA-F]{8,40}|[^\s)]+)")
 FLASHMLA_EXTENSION_NAMES = ("_flashmla_C", "_flashmla_extension_C")
 SETUP_FLASHMLA_CONDITION = """if envs.VLLM_USE_PRECOMPILED or (
