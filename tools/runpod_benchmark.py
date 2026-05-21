@@ -99,10 +99,14 @@ def write_report(status, phase, **extra):
         "applied_patch",
         "build",
         "candidate_summary",
+        "environment",
         "flashmla_extraction",
+        "realtime",
+        "serving",
         "source_build_summary",
         "source_overlay",
         "source_provenance",
+        "vllm",
     )
     for optional_artifact in sorted(artifacts_dir.iterdir()) if artifacts_dir.exists() else []:
         if optional_artifact.is_file() and optional_artifact.name.startswith(artifact_prefixes):

@@ -54,6 +54,24 @@ def flashmla_source_loop_command(args: argparse.Namespace) -> str:
     ]
     for candidate in args.candidate:
         parts.extend(["--candidate", str(candidate)])
+    if getattr(args, "serving_benchmark", False):
+        parts.append("--serving-benchmark")
+        parts.extend(["--model-path", str(args.model_path)])
+        if args.served_model_name:
+            parts.extend(["--served-model-name", args.served_model_name])
+        parts.extend(["--prompts-file", str(args.prompts_file)])
+        parts.extend(["--endpoint", args.endpoint])
+        parts.extend(["--concurrency", args.concurrency])
+        parts.extend(["--max-tokens", str(args.max_tokens)])
+        parts.extend(["--server-port", str(args.server_port)])
+        parts.extend(["--warmup-requests", str(args.warmup_requests)])
+        parts.extend(["--serving-repeats", str(args.serving_repeats)])
+        parts.extend(["--temperature", str(args.temperature)])
+        parts.extend(["--server-startup-timeout-s", str(args.server_startup_timeout_s)])
+        for extra_arg in args.vllm_arg:
+            parts.append(f"--vllm-arg={extra_arg}")
+        for env_override in args.vllm_env:
+            parts.extend(["--vllm-env", env_override])
     return shlex.join(parts)
 
 
@@ -133,9 +151,25 @@ def run_loop(args: argparse.Namespace) -> int:
         "source_ref": normalize_source_ref(args.source_ref),
         "flashmla_ref": args.flashmla_ref,
         "candidates": [str(path) for path in args.candidate],
+        "serving_benchmark": args.serving_benchmark,
         "command": command,
         "benchmark_command": benchmark_command,
     }
+    if args.serving_benchmark:
+        payload["serving_config"] = {
+            "model_path": str(args.model_path),
+            "served_model_name": args.served_model_name,
+            "prompts_file": str(args.prompts_file),
+            "endpoint": args.endpoint,
+            "concurrency": args.concurrency,
+            "max_tokens": args.max_tokens,
+            "server_port": args.server_port,
+            "warmup_requests": args.warmup_requests,
+            "serving_repeats": args.serving_repeats,
+            "temperature": args.temperature,
+            "vllm_args": args.vllm_arg,
+            "vllm_env": args.vllm_env,
+        }
     summary_path = session_dir / "summary.json"
     write_summary(summary_path, payload)
 
@@ -186,6 +220,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/evolve_flashmla"))
     parser.add_argument("--terminate-on-complete", action="store_true")
     parser.add_argument("--local-dry-run", action="store_true")
+    parser.add_argument("--serving-benchmark", action="store_true")
+    parser.add_argument("--model-path", default=None)
+    parser.add_argument("--served-model-name", default=None)
+    parser.add_argument("--prompts-file", type=Path, default=Path("bench/prompts/realtime_prefill.jsonl"))
+    parser.add_argument("--endpoint", choices=("chat.completions", "completions"), default="chat.completions")
+    parser.add_argument("--concurrency", default="1,4,8,16")
+    parser.add_argument("--max-tokens", type=int, default=64)
+    parser.add_argument("--server-port", type=int, default=8001)
+    parser.add_argument("--warmup-requests", type=int, default=2)
+    parser.add_argument("--serving-repeats", type=int, default=3)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--vllm-arg", action="append", default=[])
+    parser.add_argument("--vllm-env", action="append", default=[])
+    parser.add_argument("--server-startup-timeout-s", type=float, default=900.0)
     args = parser.parse_args(argv)
     args.repo_root = args.repo_root.resolve()
     args.env_file = args.env_file if args.env_file.is_absolute() else args.repo_root / args.env_file
@@ -198,6 +246,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise SystemExit("--baseline-us must be positive")
     if args.max_candidates < 0:
         raise SystemExit("--max-candidates must be non-negative")
+    if args.serving_benchmark and not args.model_path:
+        raise SystemExit("--serving-benchmark requires --model-path")
+    if args.max_tokens <= 0:
+        raise SystemExit("--max-tokens must be positive")
+    if args.serving_repeats <= 0:
+        raise SystemExit("--serving-repeats must be positive")
+    if args.warmup_requests < 0:
+        raise SystemExit("--warmup-requests must be non-negative")
     return args
 
 

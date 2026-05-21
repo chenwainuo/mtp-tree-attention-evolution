@@ -42,6 +42,43 @@ class EvolveFlashMLATests(unittest.TestCase):
         self.assertIn("patches/flashmla/bf16_prefill/sm90_btopk128.patch", command)
         self.assertIn("--rep 7", command)
 
+    def test_flashmla_source_loop_command_passes_serving_options(self) -> None:
+        args = argparse.Namespace(
+            python="python3",
+            mode="bf16-prefill",
+            baseline_us=23.29,
+            min_speedup_pct=2.0,
+            source_baseline_max_drift_pct=20.0,
+            source_ref="v0.21.0",
+            flashmla_ref="auto",
+            max_candidates=1,
+            warmup=5,
+            rep=7,
+            max_jobs=4,
+            candidate=[Path("patches/flashmla/bf16_prefill/sm90_btopk128.patch")],
+            serving_benchmark=True,
+            model_path="deepseek-ai/mock",
+            served_model_name="served-mock",
+            prompts_file=Path("bench/prompts/realtime_prefill.jsonl"),
+            endpoint="chat.completions",
+            concurrency="1,4",
+            max_tokens=64,
+            server_port=8001,
+            warmup_requests=2,
+            serving_repeats=3,
+            temperature=0.0,
+            vllm_arg=["--trust-remote-code"],
+            vllm_env=["VLLM_USE_DEEP_GEMM=0"],
+            server_startup_timeout_s=120.0,
+        )
+        command = evolve_flashmla.flashmla_source_loop_command(args)
+        self.assertIn("--serving-benchmark", command)
+        self.assertIn("--model-path deepseek-ai/mock", command)
+        self.assertIn("--served-model-name served-mock", command)
+        self.assertIn("--concurrency 1,4", command)
+        self.assertIn("--vllm-arg=--trust-remote-code", command)
+        self.assertIn("--vllm-env VLLM_USE_DEEP_GEMM=0", command)
+
     def test_build_runpod_command_skips_default_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -82,6 +119,19 @@ class EvolveFlashMLATests(unittest.TestCase):
         self.assertEqual(runtime, 22.40)
         self.assertEqual(correctness, "PASS (allclose)")
         self.assertTrue(flashmla_source_loop.correctness_passed(correctness))
+
+    def test_parse_concurrency_values(self) -> None:
+        self.assertEqual(flashmla_source_loop.parse_concurrency_values("1, 4,8"), [1, 4, 8])
+        with self.assertRaises(ValueError):
+            flashmla_source_loop.parse_concurrency_values("0")
+
+    def test_parse_env_overrides(self) -> None:
+        self.assertEqual(
+            flashmla_source_loop.parse_env_overrides(["VLLM_USE_DEEP_GEMM=0"]),
+            {"VLLM_USE_DEEP_GEMM": "0"},
+        )
+        with self.assertRaises(ValueError):
+            flashmla_source_loop.parse_env_overrides(["MISSING_SEPARATOR"])
 
     def test_drift_pct(self) -> None:
         self.assertAlmostEqual(
@@ -196,6 +246,18 @@ class EvolveFlashMLATests(unittest.TestCase):
             (["git", "submodule", "update", "--init", "--recursive"], calls[-1][1]),
             calls,
         )
+
+    def test_guarded_no_topk_patch_keeps_generic_fallback(self) -> None:
+        patch_path = Path(
+            "patches/flashmla/bf16_prefill/"
+            "sm90_prefill_guarded_no_topklen_assume_valid_sync_order.patch"
+        )
+        content = patch_path.read_text()
+        self.assertIn("params.topk == 512", content)
+        self.assertIn("run_fwd_phase1_kernel<576, false, true>(params)", content)
+        self.assertIn("run_fwd_phase1_kernel<576, false>(params)", content)
+        self.assertIn("ASSUME_VALID_INDICES", content)
+        self.assertNotIn("STATIC_TOPK_BLOCKS", content)
 
 
 if __name__ == "__main__":
