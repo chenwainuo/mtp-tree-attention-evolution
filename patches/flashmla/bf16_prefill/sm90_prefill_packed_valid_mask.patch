@@ -1,0 +1,81 @@
+diff --git a/csrc/sm90/prefill/sparse/config.h b/csrc/sm90/prefill/sparse/config.h
+index 7500566..119eff5 100644
+--- a/csrc/sm90/prefill/sparse/config.h
++++ b/csrc/sm90/prefill/sparse/config.h
+@@ -27,6 +27,9 @@ static constexpr int B_H = 64;
+ static constexpr int B_TOPK = 64;    // TopK block size
+ static constexpr int NUM_THREADS = 128*3;
+ static constexpr float MAX_INIT_VAL = -1e30;    // We use this number as the initial value for mi (max logits)
++static constexpr int PRODUCER_GROUP_SIZE = 8;
++static constexpr int PRODUCER_NUM_GROUPS = 128 / PRODUCER_GROUP_SIZE;
++static constexpr int PRODUCER_ROWS_PER_GROUP = B_TOPK / PRODUCER_NUM_GROUPS;
+ 
+ template<int NUM_TILES>
+ using SmemLayoutQTiles = decltype(coalesce(tile_to_shape(
+@@ -74,7 +77,7 @@ struct SharedMemoryPlan {
+     array_aligned<bf16, cosize_v<SmemLayoutK>> k[2];
+     array_aligned<bf16, cosize_v<SmemLayoutS>> s[D_QK == 576 ? 1 : 2];  // For V3.2 (whose D_QK is 576), we overlap sS[0] with k's RoPE part to save shared memory; For MODEL1 (whose D_QK is 512), we allocate two buffers
+ 
+-    bool is_kv_valid[2][B_TOPK];
++    char is_kv_valid[2][PRODUCER_NUM_GROUPS];
+     float2 sM[32];
+     float2 sL[64];   // For reduction across WG0/1 in epilogue
+     float final_max_logits[64], final_lse[64];
+diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
+index bf2fff8..71fb6e1 100644
+--- a/csrc/sm90/prefill/sparse/phase1.cuh
++++ b/csrc/sm90/prefill/sparse/phase1.cuh
+@@ -119,13 +119,18 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         auto mask_rP = [&](auto warpgroup_idx) {
+             constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
+             plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
++            auto is_col_valid = [&](int col) {
++                int group = col & (PRODUCER_NUM_GROUPS - 1);
++                int row = col / PRODUCER_NUM_GROUPS;
++                return (int(plan.is_kv_valid[IS_WG1][group]) >> row) & 1;
++            };
+             CUTE_UNROLL
+             for (int row_idx = 0; row_idx < 2; ++row_idx) {
+                 CUTE_UNROLL
+                 for (int i = row_idx*2; i < size(rP); i += 4) {
+                     int col = 8*(i/4) + (idx_in_warpgroup%4)*2;
+-                    if (!plan.is_kv_valid[IS_WG1][col]) rP(i) = -INFINITY;
+-                    if (!plan.is_kv_valid[IS_WG1][col+1]) rP(i+1) = -INFINITY;
++                    if (!is_col_valid(col)) rP(i) = -INFINITY;
++                    if (!is_col_valid(col+1)) rP(i+1) = -INFINITY;
+                 }
+             }
+         };
+@@ -463,10 +468,10 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         // Producer warpgroup
+         cutlass::arch::warpgroup_reg_dealloc<72>();
+ 
+-        constexpr int GROUP_SIZE = 8, NUM_GROUPS = 128/GROUP_SIZE;
+-        constexpr int NUM_ROWS_PER_GROUP = B_TOPK / NUM_GROUPS;
+-        int idx_in_group = idx_in_warpgroup % GROUP_SIZE;
+-        int group_idx = idx_in_warpgroup / GROUP_SIZE;
++        constexpr int NUM_GROUPS = PRODUCER_NUM_GROUPS;
++        constexpr int NUM_ROWS_PER_GROUP = PRODUCER_ROWS_PER_GROUP;
++        int idx_in_group = idx_in_warpgroup % PRODUCER_GROUP_SIZE;
++        int group_idx = idx_in_warpgroup / PRODUCER_GROUP_SIZE;
+         int* gIndices = params.indices + s_q_idx*params.stride_indices_s_q;   // [topk]
+ 
+         bf16* my_sKV_base = &(make_tensor(make_smem_ptr(plan.k[0].data()), SmemLayoutKTiles<1>{})(group_idx, idx_in_group*8));
+@@ -546,10 +551,14 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+             // NOTE: V1R's finish implies maskings of the last round have finished
+             if (idx_in_group == 0) {
+                 CUTE_UNROLL
+-                for (int buf_idx = 0; buf_idx < 2; ++buf_idx)
++                for (int buf_idx = 0; buf_idx < 2; ++buf_idx) {
++                    char valid_mask = 0;
+                     CUTE_UNROLL
+-                    for (int local_row = 0; local_row < NUM_ROWS_PER_GROUP; ++local_row)
+-                        plan.is_kv_valid[buf_idx][local_row*NUM_GROUPS+group_idx] = is_token_valid[buf_idx][local_row];
++                    for (int local_row = 0; local_row < NUM_ROWS_PER_GROUP; ++local_row) {
++                        valid_mask |= ((char)is_token_valid[buf_idx][local_row]) << local_row;
++                    }
++                    plan.is_kv_valid[buf_idx][group_idx] = valid_mask;
++                }
+                 plan.bar_is_kv_valid_ready.arrive();
+             }
+ 

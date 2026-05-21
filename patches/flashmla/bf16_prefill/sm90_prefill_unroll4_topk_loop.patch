@@ -1,0 +1,27 @@
+diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
+--- a/csrc/sm90/prefill/sparse/phase1.cuh
++++ b/csrc/sm90/prefill/sparse/phase1.cuh
+@@ -306,6 +306,6 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+             };
+             
+-            CUTE_NO_UNROLL
++            #pragma unroll 4
+             for (int block_idx = 0; block_idx < num_topk_blocks; block_idx += 2) {
+                 Tensor sV0l = make_tensor(make_smem_ptr(plan.k[0].data()), SmemLayoutKTilesTransposed<4>{});
+                 Tensor sV1l = make_tensor(make_smem_ptr(plan.k[1].data()), SmemLayoutKTilesTransposed<4>{});
+@@ -397,6 +397,6 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+             };
+             
+-            CUTE_NO_UNROLL
++            #pragma unroll 4
+             for (int block_idx = 0; block_idx < num_topk_blocks; block_idx += 2) {
+                 Tensor sV0r = make_tensor(make_smem_ptr(plan.k[0].data()+64*256), SmemLayoutKTilesTransposed<4>{});
+                 Tensor sV1r = make_tensor(make_smem_ptr(plan.k[1].data()+64*256), SmemLayoutKTilesTransposed<4>{});
+@@ -521,6 +521,6 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         int cur_bar_wait_phase = 1;
+ 
+-        CUTE_NO_UNROLL
++        #pragma unroll 4
+         for (int block_idx = 0; block_idx < num_topk_blocks; block_idx += 2) {
+             load_token_indices(block_idx);
+ 

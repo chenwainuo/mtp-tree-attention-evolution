@@ -1,0 +1,11 @@
+diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
+--- a/csrc/sm90/prefill/sparse/phase1.cuh
++++ b/csrc/sm90/prefill/sparse/phase1.cuh
+@@ -131,7 +131,6 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         };
+ 
+         auto online_softmax_and_rescale_o = [&](auto warpgroup_idx) {
+-            plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+             constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
+             const float scale = params.sm_scale_div_log2;
+             float r_sM[2];

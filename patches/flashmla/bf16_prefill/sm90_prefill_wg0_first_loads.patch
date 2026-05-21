@@ -1,0 +1,26 @@
+diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
+--- a/csrc/sm90/prefill/sparse/phase1.cuh
++++ b/csrc/sm90/prefill/sparse/phase1.cuh
+@@ -526,15 +526,15 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+             copy_tiles(block_idx+0, 0, 0, 4);
+             commit_to_mbar(plan.bar_k0_ready[0]);
+ 
+-            // V1R
+-            plan.bar_k1_free[1].wait(cur_bar_wait_phase);
+-            copy_tiles(block_idx+1, 1, 4, D_K/64);
+-            commit_to_mbar(plan.bar_k1_ready[1]);
+-            
+             // V0R
+             plan.bar_k0_free[1].wait(cur_bar_wait_phase);
+             copy_tiles(block_idx+0, 0, 4, D_K/64);
+             commit_to_mbar(plan.bar_k0_ready[1]);
++
++            // V1R
++            plan.bar_k1_free[1].wait(cur_bar_wait_phase);
++            copy_tiles(block_idx+1, 1, 4, D_K/64);
++            commit_to_mbar(plan.bar_k1_ready[1]);
+ 
+             // V1L
+             plan.bar_k1_free[0].wait(cur_bar_wait_phase);
+             copy_tiles(block_idx+1, 1, 0, 4);
+             commit_to_mbar(plan.bar_k1_ready[0]);
