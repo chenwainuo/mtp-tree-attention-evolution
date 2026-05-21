@@ -1,0 +1,59 @@
+diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
+index bf2fff8..7113706 100644
+--- a/csrc/sm90/prefill/sparse/phase1.cuh
++++ b/csrc/sm90/prefill/sparse/phase1.cuh
+@@ -117,21 +117,23 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         };
+ 
+         auto mask_rP = [&](auto warpgroup_idx) {
+-            constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
+-            plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+-            CUTE_UNROLL
+-            for (int row_idx = 0; row_idx < 2; ++row_idx) {
++            if constexpr (HAVE_TOPK_LENGTH) {
++                constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
++                plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+                 CUTE_UNROLL
+-                for (int i = row_idx*2; i < size(rP); i += 4) {
+-                    int col = 8*(i/4) + (idx_in_warpgroup%4)*2;
+-                    if (!plan.is_kv_valid[IS_WG1][col]) rP(i) = -INFINITY;
+-                    if (!plan.is_kv_valid[IS_WG1][col+1]) rP(i+1) = -INFINITY;
++                for (int row_idx = 0; row_idx < 2; ++row_idx) {
++                    CUTE_UNROLL
++                    for (int i = row_idx*2; i < size(rP); i += 4) {
++                        int col = 8*(i/4) + (idx_in_warpgroup%4)*2;
++                        if (!plan.is_kv_valid[IS_WG1][col]) rP(i) = -INFINITY;
++                        if (!plan.is_kv_valid[IS_WG1][col+1]) rP(i+1) = -INFINITY;
++                    }
+                 }
+             }
+         };
+ 
+         auto online_softmax_and_rescale_o = [&](auto warpgroup_idx) {
+-            plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
++            if constexpr (HAVE_TOPK_LENGTH) plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+             constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
+             const float scale = params.sm_scale_div_log2;
+             float r_sM[2];
+@@ -544,13 +546,15 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+ 
+             // Valid mask
+             // NOTE: V1R's finish implies maskings of the last round have finished
+-            if (idx_in_group == 0) {
+-                CUTE_UNROLL
+-                for (int buf_idx = 0; buf_idx < 2; ++buf_idx)
++            if constexpr (HAVE_TOPK_LENGTH) {
++                if (idx_in_group == 0) {
+                     CUTE_UNROLL
+-                    for (int local_row = 0; local_row < NUM_ROWS_PER_GROUP; ++local_row)
+-                        plan.is_kv_valid[buf_idx][local_row*NUM_GROUPS+group_idx] = is_token_valid[buf_idx][local_row];
+-                plan.bar_is_kv_valid_ready.arrive();
++                    for (int buf_idx = 0; buf_idx < 2; ++buf_idx)
++                        CUTE_UNROLL
++                        for (int local_row = 0; local_row < NUM_ROWS_PER_GROUP; ++local_row)
++                            plan.is_kv_valid[buf_idx][local_row*NUM_GROUPS+group_idx] = is_token_valid[buf_idx][local_row];
++                    plan.bar_is_kv_valid_ready.arrive();
++                }
+             }
+ 
+             cur_bar_wait_phase ^= 1;

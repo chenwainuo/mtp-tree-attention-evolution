@@ -1,0 +1,129 @@
+diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
+index bf2fff8..bd5f3d2 100644
+--- a/csrc/sm90/prefill/sparse/phase1.cuh
++++ b/csrc/sm90/prefill/sparse/phase1.cuh
+@@ -81,7 +81,7 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+     const int num_topk_blocks = HAVE_TOPK_LENGTH ? ku::ceil_div(topk_length, (int)B_TOPK) : (int)((unsigned int)params.topk/(unsigned int)B_TOPK);
+ 
+     if (warpgroup_idx == 0 || warpgroup_idx == 1) {
+-        cutlass::arch::warpgroup_reg_alloc<216>();
++        cutlass::arch::warpgroup_reg_alloc<224>();
+ 
+         if (warp_idx == 0 && elect_one_sync()) {
+             // Load Q
+@@ -117,21 +117,23 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         };
+ 
+         auto mask_rP = [&](auto warpgroup_idx) {
+-            constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
+-            plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+-            CUTE_UNROLL
+-            for (int row_idx = 0; row_idx < 2; ++row_idx) {
++            if constexpr (HAVE_TOPK_LENGTH) {
++                constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
++                plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+                 CUTE_UNROLL
+-                for (int i = row_idx*2; i < size(rP); i += 4) {
+-                    int col = 8*(i/4) + (idx_in_warpgroup%4)*2;
+-                    if (!plan.is_kv_valid[IS_WG1][col]) rP(i) = -INFINITY;
+-                    if (!plan.is_kv_valid[IS_WG1][col+1]) rP(i+1) = -INFINITY;
++                for (int row_idx = 0; row_idx < 2; ++row_idx) {
++                    CUTE_UNROLL
++                    for (int i = row_idx*2; i < size(rP); i += 4) {
++                        int col = 8*(i/4) + (idx_in_warpgroup%4)*2;
++                        if (!plan.is_kv_valid[IS_WG1][col]) rP(i) = -INFINITY;
++                        if (!plan.is_kv_valid[IS_WG1][col+1]) rP(i+1) = -INFINITY;
++                    }
+                 }
+             }
+         };
+ 
+         auto online_softmax_and_rescale_o = [&](auto warpgroup_idx) {
+-            plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
++            if constexpr (HAVE_TOPK_LENGTH) plan.bar_is_kv_valid_ready.wait(cur_bar_wait_phase);
+             constexpr bool IS_WG1 = std::is_same_v<decltype(warpgroup_idx), Warpgroup1>;
+             const float scale = params.sm_scale_div_log2;
+             float r_sM[2];
+@@ -461,7 +463,7 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+         }
+     } else {
+         // Producer warpgroup
+-        cutlass::arch::warpgroup_reg_dealloc<72>();
++        cutlass::arch::warpgroup_reg_dealloc<56>();
+ 
+         constexpr int GROUP_SIZE = 8, NUM_GROUPS = 128/GROUP_SIZE;
+         constexpr int NUM_ROWS_PER_GROUP = B_TOPK / NUM_GROUPS;
+@@ -482,11 +484,11 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+                     int offs = (block_idx+buf_idx)*B_TOPK + local_row*NUM_GROUPS + group_idx;
+                     int t = __ldg(gIndices + offs);
+                     token_indices[buf_idx][local_row] = t*(int64_t)params.stride_kv_s_kv;   // We mult it with params.stride_kv_s_kv here since it's faster
+-                    bool is_cur_token_valid = t >= 0 && t < params.s_kv;
+                     if constexpr (HAVE_TOPK_LENGTH) {
++                        bool is_cur_token_valid = t >= 0 && t < params.s_kv;
+                         is_cur_token_valid &= offs < topk_length;
++                        is_token_valid[buf_idx][local_row] = is_cur_token_valid;
+                     }
+-                    is_token_valid[buf_idx][local_row] = is_cur_token_valid;
+                 }
+             }
+         };
+@@ -502,10 +504,14 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+                 int64_t token_index = token_indices[buf_idx][local_row];
+                 CUTE_UNROLL
+                 for (int tile_idx = tile_start; tile_idx < tile_end; ++tile_idx) {
++                    bool do_copy = true;
++                    if constexpr (HAVE_TOPK_LENGTH) {
++                        do_copy = is_token_valid[buf_idx][local_row];
++                    }
+                     cp_async_cacheglobal_l2_prefetch_256B(
+                         my_gKV_base + token_index + tile_idx*64,
+                         my_sKV_base + (buf_idx*B_TOPK*D_K + tile_idx*(B_TOPK*64) + local_row*NUM_GROUPS*64),
+-                        is_token_valid[buf_idx][local_row],
++                        do_copy,
+                         cache_policy
+                     );
+                 }
+@@ -527,16 +533,16 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+             copy_tiles(block_idx+0, 0, 0, 4);
+             commit_to_mbar(plan.bar_k0_ready[0]);
+ 
+-            // V1R
+-            plan.bar_k1_free[1].wait(cur_bar_wait_phase);
+-            copy_tiles(block_idx+1, 1, 4, D_K/64);
+-            commit_to_mbar(plan.bar_k1_ready[1]);
+-            
+             // V0R
+             plan.bar_k0_free[1].wait(cur_bar_wait_phase);
+             copy_tiles(block_idx+0, 0, 4, D_K/64);
+             commit_to_mbar(plan.bar_k0_ready[1]);
+ 
++            // V1R
++            plan.bar_k1_free[1].wait(cur_bar_wait_phase);
++            copy_tiles(block_idx+1, 1, 4, D_K/64);
++            commit_to_mbar(plan.bar_k1_ready[1]);
++
+             // V1L
+             plan.bar_k1_free[0].wait(cur_bar_wait_phase);
+             copy_tiles(block_idx+1, 1, 0, 4);
+@@ -544,13 +550,15 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
+ 
+             // Valid mask
+             // NOTE: V1R's finish implies maskings of the last round have finished
+-            if (idx_in_group == 0) {
+-                CUTE_UNROLL
+-                for (int buf_idx = 0; buf_idx < 2; ++buf_idx)
++            if constexpr (HAVE_TOPK_LENGTH) {
++                if (idx_in_group == 0) {
+                     CUTE_UNROLL
+-                    for (int local_row = 0; local_row < NUM_ROWS_PER_GROUP; ++local_row)
+-                        plan.is_kv_valid[buf_idx][local_row*NUM_GROUPS+group_idx] = is_token_valid[buf_idx][local_row];
+-                plan.bar_is_kv_valid_ready.arrive();
++                    for (int buf_idx = 0; buf_idx < 2; ++buf_idx)
++                        CUTE_UNROLL
++                        for (int local_row = 0; local_row < NUM_ROWS_PER_GROUP; ++local_row)
++                            plan.is_kv_valid[buf_idx][local_row*NUM_GROUPS+group_idx] = is_token_valid[buf_idx][local_row];
++                    plan.bar_is_kv_valid_ready.arrive();
++                }
+             }
+ 
+             cur_bar_wait_phase ^= 1;

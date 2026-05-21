@@ -259,8 +259,46 @@ Unit tests: PASS (36 tests)
 Remote result:
 
 ```text
-Status: not measured yet
-Reason: RunPod refused new H100 pods with "account balance is too low to rent a pod" before a post-runner-fix H100 measurement could start.
+Correctness: PASS
+Runtime: 44.41 us
+Speedup vs source no-op: -87.384%
+Speedup vs wheel baseline: -90.683%
+Status: rejected, much slower than source no-op
+```
+
+### 15% Stretch Sweep After RunPod Credit Refill
+
+Command:
+
+```text
+python3 tools/evolve_flashmla.py \
+  --ref 0db0fcfa91e3ee03478ba89baf685fb0882938c2 \
+  --baseline-us 23.29 \
+  --source-ref v0.21.0 \
+  --min-speedup-pct 15 \
+  --max-jobs 8 \
+  --max-candidates 6 \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_static_topk512_single_wait_unroll4.patch \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_packed_mask_single_wait.patch \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_unroll4_topk_loop.patch \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_wg0_first_loads.patch \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_regs224.patch \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_sync_order_regs.patch \
+  --terminate-on-complete
+```
+
+Remote result summary:
+
+```text
+source-noop: 23.70 us, PASS
+sm90_prefill_static_topk512_single_wait_unroll4: 44.41 us, PASS, -87.384% vs source
+sm90_prefill_packed_mask_single_wait: 23.16 us, PASS, +2.278% vs source
+sm90_prefill_unroll4_topk_loop: 46.26 us, PASS, -95.190% vs source
+sm90_prefill_wg0_first_loads: 23.39 us, PASS, +1.308% vs source
+sm90_prefill_regs224: 23.45 us, PASS, +1.055% vs source
+sm90_prefill_sync_order_regs: 22.74 us, PASS, +4.051% vs source, +2.362% vs wheel
+Status: exhausted, no candidate reached 15%
+Best new candidate: sm90_prefill_sync_order_regs
 ```
 
 ## Important Artifacts
@@ -268,13 +306,13 @@ Reason: RunPod refused new H100 pods with "account balance is too low to rent a 
 Latest complete candidate run:
 
 ```text
-artifacts/evolve_flashmla/evolve-flashmla-20260521-163244/runpod/runpod-p14bcc3sym0mag-20260521-164402/
+artifacts/evolve_flashmla/evolve-flashmla-20260521-194436/runpod/runpod-p9fyetcfn76d9y-20260521-200407/
 ```
 
 Most important file:
 
 ```text
-artifacts/evolve_flashmla/evolve-flashmla-20260521-163244/runpod/runpod-p14bcc3sym0mag-20260521-164402/candidate_summary.json
+artifacts/evolve_flashmla/evolve-flashmla-20260521-194436/runpod/runpod-p9fyetcfn76d9y-20260521-200407/candidate_summary.json
 ```
 
 Useful supporting artifacts:
@@ -342,8 +380,8 @@ Recommended next loop-infrastructure work:
 Recommended next kernel-candidate directions:
 
 1. Avoid changing `B_TOPK` upward without first computing shared-memory size and launch limits.
-2. Continue testing the queued low-risk SM90 patches that were not reached after `sm90_prefill_single_mask_wait` stopped the batch early: packed validity masks, top-k loop unrolling, producer load ordering, and register redistribution.
-3. Consider specializing only the D_QK=576/no-topk-length instantiation without increasing shared memory.
+2. Treat loop unrolling and static top-k specialization as poor candidates for this kernel; both were correct but roughly 2x slower in the 15% sweep.
+3. Test a no-topk-length hot-path assumption for the benchmark shape: every generated sparse index is valid, so the no-topk-length instantiation can skip consumer-side validity masking and possibly producer-side validity predicates while preserving the `HAVE_TOPK_LENGTH` path.
 4. Investigate whether the SM100 sources contain useful scheduling ideas that can be safely backported to SM90 prefill.
 5. Add instrumentation or static reporting for `sizeof(SharedMemoryPlan)` by candidate to reject impossible kernels locally before remote runtime.
 
@@ -355,6 +393,6 @@ Implement FP8 decode correctness for the packed-cache layout so the loop can opt
 
 ## Current Bottom Line
 
-The source-build FlashMLA optimization loop is functional and validated on H100. The current best source-built kernel is `sm90_prefill_single_mask_wait`, which passed BF16 sparse prefill correctness and improved runtime from 23.46 us to 22.90 us in the accepted run.
+The source-build FlashMLA optimization loop is functional and validated on H100. The current best source-built kernel is `sm90_prefill_sync_order_regs`, which passed BF16 sparse prefill correctness and improved runtime from 23.70 us to 22.74 us in the latest 15% sweep.
 
-The immediate kernel bottleneck is higher-upside candidate validation toward the 15% stretch target. The immediate execution blocker is RunPod credit availability for the next H100 run.
+The immediate kernel bottleneck is higher-upside candidate validation toward the 15% stretch target. RunPod credit availability was restored enough to complete the latest secure H100 sweep.
