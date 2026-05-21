@@ -77,6 +77,10 @@ def build_runpod_command(args: argparse.Namespace, session_dir: Path) -> tuple[l
         str(args.timeout_minutes),
         "--poll-seconds",
         str(args.poll_seconds),
+        "--pod-create-retries",
+        str(getattr(args, "pod_create_retries", 1)),
+        "--pod-create-retry-seconds",
+        str(getattr(args, "pod_create_retry_seconds", 60)),
         "--install-profile",
         "runpod-vllm-source",
         "--output-dir",
@@ -176,6 +180,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-jobs", type=int, default=8)
     parser.add_argument("--timeout-minutes", type=int, default=240)
     parser.add_argument("--poll-seconds", type=int, default=15)
+    parser.add_argument("--pod-create-retries", type=int, default=1)
+    parser.add_argument("--pod-create-retry-seconds", type=int, default=60)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/evolve_flashmla"))
     parser.add_argument("--terminate-on-complete", action="store_true")
     parser.add_argument("--local-dry-run", action="store_true")

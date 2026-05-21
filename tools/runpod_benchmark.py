@@ -554,6 +554,24 @@ def delete_pod(api_base: str, api_key: str, pod_id: str) -> None:
     request_json("DELETE", f"{api_base}/pods/{pod_id}", api_key=api_key, timeout=60)
 
 
+def create_pod_with_retries(args: argparse.Namespace, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    attempts = max(1, args.pod_create_retries)
+    for attempt in range(1, attempts + 1):
+        try:
+            return request_json("POST", f"{args.api_base}/pods", api_key=api_key, payload=payload)
+        except RuntimeError as exc:
+            if attempt >= attempts:
+                raise
+            print(
+                "RunPod pod creation failed "
+                f"(attempt {attempt}/{attempts}): {exc}. "
+                f"Retrying in {args.pod_create_retry_seconds}s.",
+                file=sys.stderr,
+            )
+            time.sleep(args.pod_create_retry_seconds)
+    raise RuntimeError("unreachable pod creation retry state")
+
+
 def print_summary(report: dict[str, Any], run_dir: Path | None, pod_id: str, report_port: int) -> None:
     print(json.dumps(report, indent=2, sort_keys=True))
     if run_dir is not None:
@@ -595,6 +613,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout-minutes", type=int, default=120)
     parser.add_argument("--poll-seconds", type=int, default=15)
     parser.add_argument("--terminal-hold-seconds", type=int, default=600)
+    parser.add_argument("--pod-create-retries", type=int, default=1)
+    parser.add_argument("--pod-create-retry-seconds", type=int, default=60)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runpod"))
     parser.add_argument("--terminate-on-complete", action="store_true")
     parser.add_argument(
@@ -616,7 +636,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     api_key = resolve_api_key(args.env_file)
-    pod = request_json("POST", f"{args.api_base}/pods", api_key=api_key, payload=payload)
+    pod = create_pod_with_retries(args, api_key, payload)
     pod_id = pod.get("id")
     if not pod_id:
         raise SystemExit(f"RunPod create response did not include a pod id: {pod}")
