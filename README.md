@@ -221,5 +221,10 @@ baseline `23.29 us`. If the no-op source build drifts by more than
 `--source-baseline-max-drift-pct` from the wheel baseline, the loop stops before
 testing candidates.
 
+The source-build path keeps the installed vLLM wheel as the production package,
+builds only the FlashMLA extension targets from source, and overlays the rebuilt
+`_flashmla_C` / `_flashmla_extension_C` shared objects plus the generated
+FlashMLA Python shim into that installed package.
+
 `tools/evolve_h100.py` and `--flashmla-impl triton` remain comparison-only
 experiments. They are not the FlashMLA optimization target.

@@ -100,6 +100,7 @@ def write_report(status, phase, **extra):
         "candidate_summary",
         "flashmla_extraction",
         "source_build_summary",
+        "source_overlay",
         "source_provenance",
     )
     for optional_artifact in sorted(artifacts_dir.iterdir()) if artifacts_dir.exists() else []:

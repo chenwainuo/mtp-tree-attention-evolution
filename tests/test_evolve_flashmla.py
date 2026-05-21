@@ -101,6 +101,50 @@ class EvolveFlashMLATests(unittest.TestCase):
             content = source_build_flashmla.validate_flashmla_source(root)
         self.assertIn("B_TOPK = 64", content)
 
+    def test_patch_vllm_setup_for_flashmla_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            setup = root / "setup.py"
+            setup.write_text(
+                source_build_flashmla.SETUP_FLASHMLA_CONDITION
+                + "\n"
+                + "if _no_device():\n"
+                + "    ext_modules = []\n"
+                + "        if _is_cuda() or _is_hip():\n"
+                + "            pass\n"
+                + "        if _is_cuda():\n"
+                + "            # copy vendored deep_gemm package\n"
+                + "            pass\n"
+            )
+            source_build_flashmla.patch_vllm_setup_for_flashmla_overlay(root)
+            content = setup.read_text()
+
+        self.assertIn("MTP_FORCE_FLASHMLA_EXTENSIONS", content)
+        self.assertIn("MTP_FLASHMLA_ONLY_BUILD", content)
+        self.assertIn('flashmla_targets = {"vllm._flashmla_C"', content)
+        self.assertIn('os.getenv("MTP_FLASHMLA_ONLY_BUILD") != "1"', content)
+
+    def test_copy_flashmla_overlay_copies_extensions_and_interface(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pkg = root / "source" / "vllm"
+            package_dir = root / "site" / "vllm"
+            source_pkg.mkdir(parents=True)
+            package_dir.mkdir(parents=True)
+            (source_pkg / "_flashmla_C.abi3.so").write_text("core")
+            (source_pkg / "_flashmla_extension_C.abi3.so").write_text("extension")
+            interface = source_pkg / "third_party" / "flashmla" / "flash_mla_interface.py"
+            interface.parent.mkdir(parents=True)
+            interface.write_text("interface")
+            copied = source_build_flashmla.copy_flashmla_overlay(root / "source", package_dir)
+
+            self.assertEqual(len(copied), 3)
+            self.assertEqual((package_dir / "_flashmla_C.abi3.so").read_text(), "core")
+            self.assertEqual(
+                (package_dir / "third_party" / "flashmla" / "flash_mla_interface.py").read_text(),
+                "interface",
+            )
+
     def test_git_clone_ref_initializes_submodules(self) -> None:
         calls: list[tuple[list[str], Path | None]] = []
 

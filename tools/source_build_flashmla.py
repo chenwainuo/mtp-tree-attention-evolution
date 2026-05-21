@@ -21,6 +21,13 @@ FLASHMLA_CONFIG_PATH = Path("csrc/sm90/prefill/sparse/config.h")
 EXPECTED_B_TOPK = "static constexpr int B_TOPK = 64;    // TopK block size"
 EXPECTED_TEMPLATE = "template<int D_QK, bool HAVE_TOPK_LENGTH>"
 FLASHMLA_TAG_RE = re.compile(r"GIT_TAG\s+([0-9a-fA-F]{8,40}|[^\s)]+)")
+FLASHMLA_EXTENSION_NAMES = ("_flashmla_C", "_flashmla_extension_C")
+SETUP_FLASHMLA_CONDITION = """if envs.VLLM_USE_PRECOMPILED or (
+        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.9")
+    ):"""
+SETUP_FORCED_FLASHMLA_CONDITION = """if os.getenv("MTP_FORCE_FLASHMLA_EXTENSIONS") == "1" or envs.VLLM_USE_PRECOMPILED or (
+        CUDA_HOME and get_nvcc_cuda_version() >= Version("12.9")
+    ):"""
 
 
 def run_command(
@@ -135,6 +142,77 @@ def apply_candidate_patch(
     return patch_sha
 
 
+def patch_vllm_setup_for_flashmla_overlay(vllm_dir: Path) -> None:
+    setup_path = vllm_dir / "setup.py"
+    content = setup_path.read_text()
+    if SETUP_FLASHMLA_CONDITION not in content:
+        raise RuntimeError("source mismatch: vLLM setup.py FlashMLA condition not found")
+    content = content.replace(SETUP_FLASHMLA_CONDITION, SETUP_FORCED_FLASHMLA_CONDITION, 1)
+
+    filter_marker = "if _no_device():\n    ext_modules = []\n"
+    filter_block = (
+        'if os.getenv("MTP_FLASHMLA_ONLY_BUILD") == "1":\n'
+        '    flashmla_targets = {"vllm._flashmla_C", "vllm._flashmla_extension_C"}\n'
+        "    ext_modules = [ext for ext in ext_modules if ext.name in flashmla_targets]\n\n"
+    )
+    if filter_marker not in content:
+        raise RuntimeError("source mismatch: vLLM setup.py extension filter marker not found")
+    content = content.replace(filter_marker, filter_block + filter_marker, 1)
+
+    triton_copy_marker = "        if _is_cuda() or _is_hip():\n"
+    triton_copy_replacement = (
+        '        if (_is_cuda() or _is_hip()) and os.getenv("MTP_FLASHMLA_ONLY_BUILD") != "1":\n'
+    )
+    if triton_copy_marker not in content:
+        raise RuntimeError("source mismatch: vLLM setup.py triton copy marker not found")
+    content = content.replace(triton_copy_marker, triton_copy_replacement, 1)
+
+    deep_gemm_copy_marker = "        if _is_cuda():\n            # copy vendored deep_gemm package"
+    deep_gemm_copy_replacement = (
+        '        if _is_cuda() and os.getenv("MTP_FLASHMLA_ONLY_BUILD") != "1":\n'
+        "            # copy vendored deep_gemm package"
+    )
+    if deep_gemm_copy_marker not in content:
+        raise RuntimeError("source mismatch: vLLM setup.py deep_gemm copy marker not found")
+    content = content.replace(deep_gemm_copy_marker, deep_gemm_copy_replacement, 1)
+    setup_path.write_text(content)
+
+
+def installed_vllm_package_dir(python: str) -> Path:
+    result = subprocess.run(
+        [
+            python,
+            "-c",
+            "from pathlib import Path; import vllm; print(Path(vllm.__file__).parent)",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def copy_flashmla_overlay(vllm_dir: Path, package_dir: Path) -> list[str]:
+    copied: list[str] = []
+    for extension_name in FLASHMLA_EXTENSION_NAMES:
+        matches = sorted((vllm_dir / "vllm").glob(f"{extension_name}*.so"))
+        if not matches:
+            raise RuntimeError(f"build did not produce vllm/{extension_name}*.so")
+        src = matches[-1]
+        dst = package_dir / src.name
+        shutil.copy2(src, dst)
+        copied.append(str(dst))
+
+    src_interface = vllm_dir / "vllm" / "third_party" / "flashmla" / "flash_mla_interface.py"
+    if not src_interface.exists():
+        raise RuntimeError("build did not produce vllm/third_party/flashmla/flash_mla_interface.py")
+    dst_interface = package_dir / "third_party" / "flashmla" / "flash_mla_interface.py"
+    dst_interface.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_interface, dst_interface)
+    copied.append(str(dst_interface))
+    return copied
+
+
 def build_vllm(
     vllm_dir: Path,
     flashmla_dir: Path,
@@ -143,21 +221,46 @@ def build_vllm(
     artifacts_dir: Path,
     max_jobs: int,
     label: str | None,
-) -> None:
+) -> dict[str, Any]:
+    patch_vllm_setup_for_flashmla_overlay(vllm_dir)
+    package_dir = installed_vllm_package_dir(python)
     env = os.environ.copy()
     env.update(
         {
             "FLASH_MLA_SRC_DIR": str(flashmla_dir),
             "VLLM_TARGET_DEVICE": "cuda",
             "MAX_JOBS": str(max_jobs),
+            "MTP_FORCE_FLASHMLA_EXTENSIONS": "1",
+            "MTP_FLASHMLA_ONLY_BUILD": "1",
         }
     )
     build_log = artifact_path(artifacts_dir, "build", ".log", label)
     run_command(
-        [python, "-m", "pip", "install", "--no-build-isolation", "-e", "."],
+        [python, "setup.py", "build_ext", "--inplace"],
         cwd=vllm_dir,
         env=env,
         log_path=build_log,
+    )
+    copied = copy_flashmla_overlay(vllm_dir, package_dir)
+    overlay = {
+        "mode": "flashmla-extension-overlay",
+        "installed_vllm_package_dir": str(package_dir),
+        "copied": copied,
+    }
+    write_json(artifact_path(artifacts_dir, "source_overlay", ".json", label), overlay)
+    write_json(artifacts_dir / "source_overlay.json", overlay)
+    return overlay
+
+
+def verify_flashmla_overlay(python: str) -> None:
+    subprocess.run(
+        [
+            python,
+            "-c",
+            "import vllm._flashmla_C, vllm._flashmla_extension_C; "
+            "print(vllm._flashmla_C.__file__); print(vllm._flashmla_extension_C.__file__)",
+        ],
+        check=True,
     )
 
 
@@ -237,8 +340,9 @@ def main(argv: list[str] | None = None) -> int:
         write_json(artifact_path(args.artifacts_dir, "source_provenance", ".json", args.label), provenance)
         write_json(args.artifacts_dir / "source_provenance.json", provenance)
 
+        overlay = None
         if not args.skip_build:
-            build_vllm(
+            overlay = build_vllm(
                 vllm_dir,
                 flashmla_dir,
                 python=args.python,
@@ -246,12 +350,14 @@ def main(argv: list[str] | None = None) -> int:
                 max_jobs=args.max_jobs,
                 label=args.label,
             )
+            verify_flashmla_overlay(args.python)
 
         summary.update(
             {
                 "status": "succeeded",
                 "finished_at": datetime.now(timezone.utc).isoformat(),
                 "source_provenance": provenance,
+                "overlay": overlay,
             }
         )
         write_json(summary_path, summary)
