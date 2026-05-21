@@ -1,12 +1,7 @@
 diff --git a/csrc/sm90/prefill/sparse/phase1.cuh b/csrc/sm90/prefill/sparse/phase1.cuh
 --- a/csrc/sm90/prefill/sparse/phase1.cuh
 +++ b/csrc/sm90/prefill/sparse/phase1.cuh
-@@ -492,7 +492,7 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
-             }
-         };
- 
+@@ -494,3 +494,3 @@ __device__ void KernelTemplate<D_QK, HAVE_TOPK_LENGTH>::devfunc(const SparseAttn
 -        int64_t cache_policy = createpolicy_evict_last();
 +        int64_t cache_policy = createpolicy_evict_first();
          auto copy_tiles = [&](int block_idx, int buf_idx, int tile_start, int tile_end) {
-             // Copy some K/V tiles from global memory to shared memory
-             // A tile has a shape of 64 (B_TOPK) x 64
