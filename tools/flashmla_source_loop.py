@@ -101,6 +101,8 @@ def source_build_command(
         "--max-jobs",
         str(args.max_jobs),
     ]
+    if args.reuse_source_tree:
+        command.append("--reuse-existing-tree")
     if patch is not None:
         command.extend(["--candidate-patch", str(patch)])
     return command
@@ -206,10 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-jobs", type=int, default=8)
     parser.add_argument("--work-dir", type=Path, default=Path("/workspace/flashmla-source-loop"))
     parser.add_argument("--artifacts-dir", type=Path, default=Path("/workspace/mtp-runpod-artifacts"))
+    parser.add_argument("--reuse-source-tree", action="store_true")
     args = parser.parse_args(argv)
 
     args.artifacts_dir.mkdir(parents=True, exist_ok=True)
     selected = args.candidate[: args.max_candidates]
+    shared_work_dir = args.work_dir / "shared" if args.reuse_source_tree else None
     summary: dict[str, Any] = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
@@ -228,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     noop_result = build_and_benchmark(
         "source-noop",
         args,
-        work_dir=args.work_dir / "noop",
+        work_dir=shared_work_dir or args.work_dir / "noop",
         patch=None,
         source_runtime_us=None,
     )
@@ -258,11 +262,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     for patch in selected:
-        reset_work_dir(args.work_dir / patch.stem)
         candidate_result = build_and_benchmark(
             patch.stem,
             args,
-            work_dir=args.work_dir / patch.stem,
+            work_dir=shared_work_dir or args.work_dir / patch.stem,
             patch=patch,
             source_runtime_us=noop_result.runtime_us,
         )

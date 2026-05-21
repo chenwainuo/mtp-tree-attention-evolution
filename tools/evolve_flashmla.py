@@ -50,6 +50,7 @@ def flashmla_source_loop_command(args: argparse.Namespace) -> str:
         str(args.rep),
         "--max-jobs",
         str(args.max_jobs),
+        "--reuse-source-tree",
     ]
     for candidate in args.candidate:
         parts.extend(["--candidate", str(candidate)])

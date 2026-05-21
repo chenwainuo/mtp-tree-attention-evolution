@@ -38,6 +38,7 @@ class EvolveFlashMLATests(unittest.TestCase):
         self.assertIn("tools.flashmla_source_loop", command)
         self.assertIn("--source-ref releases/v0.21.0", command)
         self.assertIn("--source-baseline-max-drift-pct 20", command)
+        self.assertIn("--reuse-source-tree", command)
         self.assertIn("patches/flashmla/bf16_prefill/sm90_btopk128.patch", command)
         self.assertIn("--rep 7", command)
 
@@ -133,6 +134,7 @@ class EvolveFlashMLATests(unittest.TestCase):
                 "    include(cmake/external_projects/vllm_flash_attn.cmake)\n"
                 "endif ()\n"
             )
+            source_build_flashmla.patch_vllm_setup_for_flashmla_overlay(root)
             source_build_flashmla.patch_vllm_setup_for_flashmla_overlay(root)
             content = setup.read_text()
             cmake_content = cmake.read_text()

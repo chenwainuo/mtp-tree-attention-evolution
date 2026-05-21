@@ -74,6 +74,27 @@ def git_clone_ref(repo: str, ref: str, dst: Path, *, log_path: Path | None = Non
     run_command(["git", "submodule", "update", "--init", "--recursive"], cwd=dst, log_path=log_path)
 
 
+def reset_repo_tree(repo_dir: Path, *, clean_untracked: bool, log_path: Path | None = None) -> None:
+    run_command(["git", "reset", "--hard"], cwd=repo_dir, log_path=log_path)
+    if clean_untracked:
+        run_command(["git", "clean", "-fd"], cwd=repo_dir, log_path=log_path)
+
+
+def prepare_repo_tree(
+    repo: str,
+    ref: str,
+    dst: Path,
+    *,
+    reuse_existing_tree: bool,
+    clean_untracked: bool,
+    log_path: Path | None = None,
+) -> None:
+    if reuse_existing_tree and (dst / ".git").exists():
+        reset_repo_tree(dst, clean_untracked=clean_untracked, log_path=log_path)
+        return
+    git_clone_ref(repo, ref, dst, log_path=log_path)
+
+
 def git_rev_parse(repo_dir: Path) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -145,9 +166,12 @@ def apply_candidate_patch(
 def patch_vllm_setup_for_flashmla_overlay(vllm_dir: Path) -> None:
     setup_path = vllm_dir / "setup.py"
     content = setup_path.read_text()
-    if SETUP_FLASHMLA_CONDITION not in content:
+    if SETUP_FORCED_FLASHMLA_CONDITION in content:
+        pass
+    elif SETUP_FLASHMLA_CONDITION in content:
+        content = content.replace(SETUP_FLASHMLA_CONDITION, SETUP_FORCED_FLASHMLA_CONDITION, 1)
+    else:
         raise RuntimeError("source mismatch: vLLM setup.py FlashMLA condition not found")
-    content = content.replace(SETUP_FLASHMLA_CONDITION, SETUP_FORCED_FLASHMLA_CONDITION, 1)
 
     filter_marker = "if _no_device():\n    ext_modules = []\n"
     filter_block = (
@@ -155,26 +179,35 @@ def patch_vllm_setup_for_flashmla_overlay(vllm_dir: Path) -> None:
         '    flashmla_targets = {"vllm._flashmla_C", "vllm._flashmla_extension_C"}\n'
         "    ext_modules = [ext for ext in ext_modules if ext.name in flashmla_targets]\n\n"
     )
-    if filter_marker not in content:
+    if filter_block in content:
+        pass
+    elif filter_marker in content:
+        content = content.replace(filter_marker, filter_block + filter_marker, 1)
+    else:
         raise RuntimeError("source mismatch: vLLM setup.py extension filter marker not found")
-    content = content.replace(filter_marker, filter_block + filter_marker, 1)
 
     triton_copy_marker = "        if _is_cuda() or _is_hip():\n"
     triton_copy_replacement = (
         '        if (_is_cuda() or _is_hip()) and os.getenv("MTP_FLASHMLA_ONLY_BUILD") != "1":\n'
     )
-    if triton_copy_marker not in content:
+    if triton_copy_replacement in content:
+        pass
+    elif triton_copy_marker in content:
+        content = content.replace(triton_copy_marker, triton_copy_replacement, 1)
+    else:
         raise RuntimeError("source mismatch: vLLM setup.py triton copy marker not found")
-    content = content.replace(triton_copy_marker, triton_copy_replacement, 1)
 
     deep_gemm_copy_marker = "        if _is_cuda():\n            # copy vendored deep_gemm package"
     deep_gemm_copy_replacement = (
         '        if _is_cuda() and os.getenv("MTP_FLASHMLA_ONLY_BUILD") != "1":\n'
         "            # copy vendored deep_gemm package"
     )
-    if deep_gemm_copy_marker not in content:
+    if deep_gemm_copy_replacement in content:
+        pass
+    elif deep_gemm_copy_marker in content:
+        content = content.replace(deep_gemm_copy_marker, deep_gemm_copy_replacement, 1)
+    else:
         raise RuntimeError("source mismatch: vLLM setup.py deep_gemm copy marker not found")
-    content = content.replace(deep_gemm_copy_marker, deep_gemm_copy_replacement, 1)
     setup_path.write_text(content)
 
     cmake_path = vllm_dir / "CMakeLists.txt"
@@ -215,11 +248,14 @@ else()
     endif ()
 endif()
 """
-    if cmake_external_marker not in cmake_content:
+    if cmake_external_replacement in cmake_content:
+        pass
+    elif cmake_external_marker in cmake_content:
+        cmake_content = cmake_content.replace(
+            cmake_external_marker, cmake_external_replacement, 1
+        )
+    else:
         raise RuntimeError("source mismatch: vLLM CMake external-project block not found")
-    cmake_content = cmake_content.replace(
-        cmake_external_marker, cmake_external_replacement, 1
-    )
     cmake_path.write_text(cmake_content)
 
 
@@ -326,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifacts-dir", type=Path, default=Path("/workspace/mtp-runpod-artifacts"))
     parser.add_argument("--label", default=None)
     parser.add_argument("--max-jobs", type=int, default=8)
+    parser.add_argument("--reuse-existing-tree", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--local-dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -353,9 +390,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        git_clone_ref(args.vllm_repo, args.vllm_ref, vllm_dir)
+        prepare_repo_tree(
+            args.vllm_repo,
+            args.vllm_ref,
+            vllm_dir,
+            reuse_existing_tree=args.reuse_existing_tree,
+            clean_untracked=False,
+        )
         flashmla_ref = parse_flashmla_ref(vllm_dir) if args.flashmla_ref == "auto" else args.flashmla_ref
-        git_clone_ref(args.flashmla_repo, flashmla_ref, flashmla_dir)
+        prepare_repo_tree(
+            args.flashmla_repo,
+            flashmla_ref,
+            flashmla_dir,
+            reuse_existing_tree=args.reuse_existing_tree,
+            clean_untracked=True,
+        )
         before_content = validate_flashmla_source(flashmla_dir)
 
         patch_sha = None
