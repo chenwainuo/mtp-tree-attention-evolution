@@ -41,12 +41,25 @@ Reason: packed FP8 low-level path is smoke/speed-only today
 Latest source-build no-op baseline:
 
 ```text
-Pod: ggv776z744sazo
-Commit: 95dcac331c36dafbc0d0a5982e0f52b5fa543d02
-Runtime: 23.64 us
+Pod: p14bcc3sym0mag
+Commit: 0ebbf426af05837dc718b2e888502d6c8a49e39b
+Runtime: 23.46 us
 Correctness: PASS (allclose atol=0.03, rtol=0.03, max_abs=0.00195312)
-Drift vs wheel baseline: 1.50% slower
+Drift vs wheel baseline: 0.73% slower
 Status: acceptable source-build drift, within 20% guardrail
+```
+
+Current accepted source-build candidate:
+
+```text
+Patch: patches/flashmla/bf16_prefill/sm90_prefill_single_mask_wait.patch
+Pod: p14bcc3sym0mag
+Commit: 0ebbf426af05837dc718b2e888502d6c8a49e39b
+Runtime: 22.90 us
+Correctness: PASS (allclose atol=0.03, rtol=0.03, max_abs=0.00195312)
+Speedup vs source no-op: 2.387%
+Speedup vs wheel baseline: 1.675%
+Status: accepted, clears 2% source-build gate
 ```
 
 ## Source-Build Loop
@@ -180,18 +193,57 @@ Status: rejected, below 2% acceptance threshold
 
 This candidate is correctness-preserving but not materially faster.
 
+### `sm90_prefill_single_mask_wait`
+
+Patch:
+
+```text
+patches/flashmla/bf16_prefill/sm90_prefill_single_mask_wait.patch
+```
+
+Intent:
+
+```text
+Remove a redundant bar_is_kv_valid_ready wait from online_softmax_and_rescale_o.
+Both warpgroup call sites already wait for the same validity-mask phase in mask_rP immediately before online softmax, so this keeps the same mask producer/consumer ordering while removing one duplicate wait from the QK/softmax path.
+```
+
+Latest result:
+
+```text
+Pod: p14bcc3sym0mag
+Commit: 0ebbf426af05837dc718b2e888502d6c8a49e39b
+No-op runtime: 23.46 us
+Candidate runtime: 22.90 us
+Correctness: PASS
+Speedup vs source no-op: 2.387%
+Speedup vs wheel baseline: 1.675%
+Status: accepted, clears 2% source-build gate
+```
+
+The candidate batch also added these untested follow-up patches because the loop stopped early after the first accepted candidate:
+
+```text
+patches/flashmla/bf16_prefill/sm90_prefill_packed_valid_mask.patch
+patches/flashmla/bf16_prefill/sm90_prefill_packed_mask_single_wait.patch
+patches/flashmla/bf16_prefill/sm90_prefill_unroll4_topk_loop.patch
+patches/flashmla/bf16_prefill/sm90_prefill_wg0_first_loads.patch
+patches/flashmla/bf16_prefill/sm90_prefill_regs224.patch
+patches/flashmla/bf16_prefill/sm90_prefill_sync_order_regs.patch
+```
+
 ## Important Artifacts
 
 Latest complete candidate run:
 
 ```text
-artifacts/evolve_flashmla/evolve-flashmla-20260521-153150/runpod/runpod-ggv776z744sazo-20260521-154312/
+artifacts/evolve_flashmla/evolve-flashmla-20260521-163244/runpod/runpod-p14bcc3sym0mag-20260521-164402/
 ```
 
 Most important file:
 
 ```text
-artifacts/evolve_flashmla/evolve-flashmla-20260521-153150/runpod/runpod-ggv776z744sazo-20260521-154312/candidate_summary.json
+artifacts/evolve_flashmla/evolve-flashmla-20260521-163244/runpod/runpod-p14bcc3sym0mag-20260521-164402/candidate_summary.json
 ```
 
 Useful supporting artifacts:
@@ -200,13 +252,13 @@ Useful supporting artifacts:
 output.log
 report.json
 build_source-noop.log
-build_sm90_prefill_evict_first.log
+build_sm90_prefill_single_mask_wait.log
 source_provenance_source-noop.json
-source_provenance_sm90_prefill_evict_first.json
+source_provenance_sm90_prefill_single_mask_wait.json
 source_overlay_source-noop.json
-source_overlay_sm90_prefill_evict_first.json
+source_overlay_sm90_prefill_single_mask_wait.json
 flashmla_extraction_source-noop.json
-flashmla_extraction_sm90_prefill_evict_first.json
+flashmla_extraction_sm90_prefill_single_mask_wait.json
 ```
 
 Earlier source-build infrastructure runs:
@@ -216,6 +268,7 @@ artifacts/evolve_flashmla/evolve-flashmla-20260521-041543/
 artifacts/evolve_flashmla/evolve-flashmla-20260521-043844/
 artifacts/evolve_flashmla/evolve-flashmla-20260521-044639/
 artifacts/evolve_flashmla/evolve-flashmla-20260521-051242/
+artifacts/evolve_flashmla/evolve-flashmla-20260521-153150/
 ```
 
 ## Known Issues
@@ -231,7 +284,7 @@ Each candidate reruns full CMake configure.
 The CMake configure still processes the broader vLLM tree even though the build target is FlashMLA-only.
 ```
 
-The latest successful run took about 11 minutes wall-clock for no-op plus one candidate. Earlier runs were longer when the loop did full editable vLLM install.
+The latest accepted run took about 11 minutes wall-clock for no-op plus one accepted candidate. Earlier runs were longer when the loop did full editable vLLM install.
 
 There is also still no FP8 packed-cache correctness gate. That means BF16 sparse prefill is the only correctness-bearing optimization target today, even though FP8 decode is important for the final V4 production path.
 
@@ -245,11 +298,12 @@ Recommended next loop-infrastructure work:
 4. Avoid rerunning no-op for every single candidate when multiple candidates are evaluated in one pod.
 5. Add `--max-candidates > 1` workflow that actually amortizes setup/build cost.
 6. Add clearer patch validation before remote execution, including `git apply --check` against the pinned FlashMLA commit.
+7. Improve resilience/report recovery for pods whose artifact HTTP endpoint returns 404 mid-run; the 200-rep confirmation attempt for `sm90_prefill_single_mask_wait` lost its report endpoint before producing usable timing and was manually terminated.
 
 Recommended next kernel-candidate directions:
 
 1. Avoid changing `B_TOPK` upward without first computing shared-memory size and launch limits.
-2. Look for lower-risk changes inside the producer warpgroup: load ordering, prefetch distance, cache policy by tile range, or validity-mask timing.
+2. Continue testing the queued low-risk SM90 patches that were not reached after `sm90_prefill_single_mask_wait` stopped the batch early: packed validity masks, top-k loop unrolling, producer load ordering, and register redistribution.
 3. Consider specializing only the D_QK=576/no-topk-length instantiation without increasing shared memory.
 4. Investigate whether the SM100 sources contain useful scheduling ideas that can be safely backported to SM90 prefill.
 5. Add instrumentation or static reporting for `sizeof(SharedMemoryPlan)` by candidate to reject impossible kernels locally before remote runtime.
@@ -262,6 +316,6 @@ Implement FP8 decode correctness for the packed-cache layout so the loop can opt
 
 ## Current Bottom Line
 
-The source-build FlashMLA optimization loop is functional and validated on H100. The current best source-built kernel remains the no-op FlashMLA overlay. No candidate has beaten the acceptance threshold yet.
+The source-build FlashMLA optimization loop is functional and validated on H100. The current best source-built kernel is `sm90_prefill_single_mask_wait`, which passed BF16 sparse prefill correctness and improved runtime from 23.46 us to 22.90 us in the accepted run.
 
-The immediate bottleneck is no longer missing infrastructure. The next gains require better FlashMLA kernel candidates and faster candidate iteration inside one pod.
+The immediate bottleneck is no longer missing infrastructure. The next gains require confirming robustness with repeat timing, testing the queued candidates that the early-stop run skipped, and making candidate iteration faster inside one pod.
