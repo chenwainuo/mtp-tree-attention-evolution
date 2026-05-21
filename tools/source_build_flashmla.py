@@ -177,6 +177,51 @@ def patch_vllm_setup_for_flashmla_overlay(vllm_dir: Path) -> None:
     content = content.replace(deep_gemm_copy_marker, deep_gemm_copy_replacement, 1)
     setup_path.write_text(content)
 
+    cmake_path = vllm_dir / "CMakeLists.txt"
+    cmake_content = cmake_path.read_text()
+    cmake_external_marker = """# For CUDA and HIP builds also build the triton_kernels external package.
+if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+    include(cmake/external_projects/triton_kernels.cmake)
+endif()
+
+# For CUDA we also build and ship some external projects.
+if (VLLM_GPU_LANG STREQUAL "CUDA")
+    include(cmake/external_projects/deepgemm.cmake)
+    include(cmake/external_projects/flashmla.cmake)
+    include(cmake/external_projects/qutlass.cmake)
+
+    # vllm-flash-attn should be last as it overwrites some CMake functions
+    include(cmake/external_projects/vllm_flash_attn.cmake)
+endif ()
+"""
+    cmake_external_replacement = """if(DEFINED ENV{MTP_FLASHMLA_ONLY_BUILD} AND "$ENV{MTP_FLASHMLA_ONLY_BUILD}" STREQUAL "1")
+    if (VLLM_GPU_LANG STREQUAL "CUDA")
+        include(cmake/external_projects/flashmla.cmake)
+    endif()
+else()
+    # For CUDA and HIP builds also build the triton_kernels external package.
+    if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")
+        include(cmake/external_projects/triton_kernels.cmake)
+    endif()
+
+    # For CUDA we also build and ship some external projects.
+    if (VLLM_GPU_LANG STREQUAL "CUDA")
+        include(cmake/external_projects/deepgemm.cmake)
+        include(cmake/external_projects/flashmla.cmake)
+        include(cmake/external_projects/qutlass.cmake)
+
+        # vllm-flash-attn should be last as it overwrites some CMake functions
+        include(cmake/external_projects/vllm_flash_attn.cmake)
+    endif ()
+endif()
+"""
+    if cmake_external_marker not in cmake_content:
+        raise RuntimeError("source mismatch: vLLM CMake external-project block not found")
+    cmake_content = cmake_content.replace(
+        cmake_external_marker, cmake_external_replacement, 1
+    )
+    cmake_path.write_text(cmake_content)
+
 
 def installed_vllm_package_dir(python: str) -> Path:
     result = subprocess.run(

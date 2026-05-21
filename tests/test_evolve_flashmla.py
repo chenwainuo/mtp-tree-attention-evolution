@@ -116,13 +116,33 @@ class EvolveFlashMLATests(unittest.TestCase):
                 + "            # copy vendored deep_gemm package\n"
                 + "            pass\n"
             )
+            cmake = root / "CMakeLists.txt"
+            cmake.write_text(
+                "# For CUDA and HIP builds also build the triton_kernels external package.\n"
+                'if(VLLM_GPU_LANG STREQUAL "CUDA" OR VLLM_GPU_LANG STREQUAL "HIP")\n'
+                "    include(cmake/external_projects/triton_kernels.cmake)\n"
+                "endif()\n"
+                "\n"
+                "# For CUDA we also build and ship some external projects.\n"
+                'if (VLLM_GPU_LANG STREQUAL "CUDA")\n'
+                "    include(cmake/external_projects/deepgemm.cmake)\n"
+                "    include(cmake/external_projects/flashmla.cmake)\n"
+                "    include(cmake/external_projects/qutlass.cmake)\n"
+                "\n"
+                "    # vllm-flash-attn should be last as it overwrites some CMake functions\n"
+                "    include(cmake/external_projects/vllm_flash_attn.cmake)\n"
+                "endif ()\n"
+            )
             source_build_flashmla.patch_vllm_setup_for_flashmla_overlay(root)
             content = setup.read_text()
+            cmake_content = cmake.read_text()
 
         self.assertIn("MTP_FORCE_FLASHMLA_EXTENSIONS", content)
         self.assertIn("MTP_FLASHMLA_ONLY_BUILD", content)
         self.assertIn('flashmla_targets = {"vllm._flashmla_C"', content)
         self.assertIn('os.getenv("MTP_FLASHMLA_ONLY_BUILD") != "1"', content)
+        self.assertIn("MTP_FLASHMLA_ONLY_BUILD", cmake_content)
+        self.assertIn("include(cmake/external_projects/flashmla.cmake)", cmake_content)
 
     def test_copy_flashmla_overlay_copies_extensions_and_interface(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
