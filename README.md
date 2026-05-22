@@ -228,3 +228,62 @@ FlashMLA Python shim into that installed package.
 
 `tools/evolve_h100.py` and `--flashmla-impl triton` remain comparison-only
 experiments. They are not the FlashMLA optimization target.
+
+## Real-Time vLLM Serving Benchmark
+
+The source-build loop can also run an end-to-end vLLM serving A/B after each
+variant passes the BF16 sparse prefill microbenchmark. This mode starts a
+vLLM OpenAI-compatible server, runs a streaming client against the fixed prompt
+corpus, saves per-workload JSON reports, then stops the server before switching
+FlashMLA overlays.
+
+The streaming client can be used directly against any running vLLM server:
+
+```bash
+python3 -m tools.bench_vllm_realtime \
+  --base-url http://127.0.0.1:8001/v1 \
+  --model <served-model-name> \
+  --prompts-file bench/prompts/realtime_prefill.jsonl \
+  --endpoint chat.completions \
+  --concurrency 1 \
+  --max-tokens 64 \
+  --temperature 0 \
+  --warmup-requests 0 \
+  --output-json artifacts/realtime_smoke.json
+```
+
+Remote A/B serving smoke:
+
+```bash
+python3 tools/evolve_flashmla.py \
+  --ref <pushed-ref> \
+  --baseline-us 23.29 \
+  --source-ref v0.21.0 \
+  --candidate patches/flashmla/bf16_prefill/sm90_prefill_guarded_no_topklen_assume_valid_sync_order.patch \
+  --serving-benchmark \
+  --model-path Qwen/Qwen2.5-0.5B-Instruct \
+  --served-model-name smoke-qwen \
+  --concurrency 1 \
+  --serving-repeats 1 \
+  --warmup-requests 0 \
+  --server-port 8001 \
+  --vllm-env VLLM_USE_DEEP_GEMM=0 \
+  --vllm-arg=--max-model-len \
+  --vllm-arg=32768 \
+  --vllm-arg=--gpu-memory-utilization \
+  --vllm-arg=0.80 \
+  --vllm-arg=--trust-remote-code \
+  --terminate-on-complete
+```
+
+Use `--vllm-env KEY=VALUE` only for the vLLM server subprocess. For vLLM 0.21
+on the tested RunPod H100 image, `VLLM_USE_DEEP_GEMM=0` was needed for the
+small Qwen serving smoke; setting it on the whole source-loop process broke the
+FlashMLA microbenchmark CUDA runtime import path.
+
+The current smoke artifact is under
+`artifacts/evolve_flashmla/evolve-flashmla-20260522-001306/`. It proves the
+harness runs end to end, not that the candidate is accepted: the guarded
+candidate passed correctness and ran serving reports, but its microbenchmark
+speedup was `1.28%` versus the no-op source overlay, below the default `2%`
+acceptance gate.
